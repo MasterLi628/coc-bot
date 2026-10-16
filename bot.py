@@ -13,11 +13,13 @@ import traceback
 
 import cv2
 
-from adbtool import ADB, adb, device, screen_size, screenshot, tap
+from adbtool import ADB, adb, device, screen_size, screenshot, swipe, tap
 import config
 from config import CFG, PID_FILE, running_pid
 from attack import attack, fill_army
+from stats import choose_plan
 from lab import try_research
+from pinch import pinch_out
 from upgrade import DESELECT, cancel_placement, close_windows, danger_on_screen, try_build_new, try_townhall, try_upgrade
 
 TEMPLATES = config.TEMPLATES
@@ -32,7 +34,6 @@ MAX_NOT_HOME = CFG["max_not_home"]              # 连续几轮不在主界面就
 RESEARCH = CFG["research"]                      # 实验室自动研究
 LAB_INTERVAL = 1800                             # 每隔多少秒看一次实验室
 ERROR_WAIT = 60               # 出错后等多少秒再重试
-LOGIN_WAIT = 300              # 账号掉线（停在登录界面）时每隔多少秒检查一次
 
 
 def load(name):
@@ -46,7 +47,7 @@ TPL = {name: load(name) for name in [
     "popup_busy", "gem_icon", "builders_zero", "townhall", "label_townhall",
     "shop_arrow", "place_ok", "place_cancel", "event_back", "popup_nogem", "btn_claim",
     "btn_continue", "army_not_full", "redline_msg",
-    "web_back", "login_screen", "label_lab", "btn_research", "lab_title",
+    "web_back", "login_screen", "label_lab", "btn_research", "lab_title", "th_locked", "btn_end_battle", "btn_reload", "btn_panel_collapse", "th_warn",
 ]}
 
 
@@ -63,7 +64,7 @@ def find_all(img, tpl, threshold=THRESHOLD):
     return points
 
 
-def find_all_scaled(img, tpl, threshold=THRESHOLD, scales=(0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.35, 1.5, 1.65)):
+def find_all_scaled(img, tpl, threshold=THRESHOLD, scales=(0.45, 0.5, 0.55, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.35, 1.5, 1.65)):
     """多尺寸匹配，应对画面缩放。"""
     points = []
     for s in scales:
@@ -107,9 +108,30 @@ def collect(img):
     return count
 
 
+def _top_zeros(img):
+    """顶部栏里工人图标的位置，和所有"0/x"里那个 0 的位置。
+    顶部栏的图标会随右边护盾倒计时的长短整体左右挪，所以不能写死坐标，要以工人图标为准。"""
+    bar = img[0:100]
+    icon = find_all(bar, TPL["builder_icon"], 0.8)
+    zeros = find_all(bar, TPL["builders_zero"], 0.85)
+    return (icon[0][0] if icon else None), zeros
+
+
 def no_free_builder(img):
-    """顶部工人数是不是 0/x。"""
-    return bool(find_all(img[0:100], TPL["builders_zero"], 0.85))
+    """顶部工人数是不是 0/x（工人图标右边那个数）。
+    找不到工人图标（比如被弹窗挡住）就当作没空闲工人，这轮先不升级，免得点出"花宝石买工人"的窗口。"""
+    icon, zeros = _top_zeros(img)
+    if icon is None:
+        return True
+    return any(icon < x < icon + 140 for x, _ in zeros)
+
+
+def lab_busy(img):
+    """顶部实验室空位是不是 0/x（工人图标左边那个数，正在研究）。"""
+    icon, zeros = _top_zeros(img)
+    if icon is None:
+        return False
+    return any(icon - 220 < x < icon - 20 for x, _ in zeros)
 
 
 def gold_full(img):
@@ -132,7 +154,8 @@ def recover(img):
     """不在主界面时先尝试点回营/关窗口。"""
     # 战斗结算的"回营"/"领取奖励"、开宝箱后的"继续"、活动广告的返回箭头
     # 还有游戏内网页（公告等）底部的"返回游戏"
-    for name in ["btn_return", "btn_claim", "btn_continue", "event_back", "web_back"]:
+    # 还有"报告首领"村民委托面板的收起箭头（点到走动的村民会弹出来）
+    for name in ["btn_return", "btn_claim", "btn_continue", "event_back", "web_back", "btn_panel_collapse"]:
         pts = find_all(img, TPL[name], 0.8)
         if pts:
             tap(*pts[0])
@@ -160,17 +183,27 @@ def emulator_online():
     return device() is not None
 
 
+class LoggedOut(Exception):
+    """账号掉线，停在登录界面。"""
+
+
 _not_home = 0
 _last_lab = 0
+_th_pause_until = 0         # 游戏建议先升进攻时，这个时间之前不去升大本营
+TH_PAUSE = 6 * 3600
 
 
 def one_round():
     global _not_home
     img = screenshot()
     if find_all(img, TPL["login_screen"], 0.8):
-        # 一般是同一个账号在手机上登录，把模拟器挤下线了；登录要本人操作，脚本只等着
-        log(f"账号已掉线，停在登录界面，需要手动登录（可能手机上登录了同一个账号）。{LOGIN_WAIT} 秒后再看")
-        time.sleep(LOGIN_WAIT)
+        # 一般是同一个账号在手机上登录，把模拟器挤下线了；登录要本人操作，挂机直接停掉
+        raise LoggedOut
+    reload = find_all(img, TPL["btn_reload"], 0.8)
+    if reload:  # "还在吗？因为太久没有进行操作，您已断开连接" 半透明盖在村庄上，点"重新载入游戏"
+        log("太久没操作被断开了，重新载入游戏")
+        tap(*reload[0])
+        time.sleep(15)
         return
     if danger_on_screen(find_all, TPL, img):
         log("屏幕上有可能花宝石的窗口，先关掉")
@@ -188,6 +221,17 @@ def one_round():
     if cancel_placement(img, TPL, log):
         time.sleep(1)
         return
+    # 每轮先把画面缩到最小：选建筑、点工人菜单时镜头会自动放大，放大了很多东西就认不出来。
+    # 缩到最小是固定的，每次都一样；双指捏合也算操作，顺便保持活跃
+    pinch_out(2)
+    time.sleep(1)
+    img = screenshot()
+    # 保持活跃：仓库满了以后一轮里可能一下都不点，游戏太久没人碰就会断开连接。
+    # 用拖动而不是点击：草地上会有带委托气泡的村民走来走去，点到会弹出"报告首领"面板
+    swipe(1500, 600, 1500, 640, 300)
+    time.sleep(0.4)
+    swipe(1500, 640, 1500, 600, 300)
+    time.sleep(0.5)
 
     n = collect(img)
     log(f"收集了 {n} 个资源" if n else "暂无可收集资源")
@@ -195,14 +239,31 @@ def one_round():
     if no_free_builder(screenshot()):
         log("工人都在忙，跳过升级")
     else:
-        skip_gold = False
-        if TOWNHALL_FIRST:
+        skip_gold = False   # 金币留着升大本营，升级时只花圣水
+        build_gold = False  # 造新建筑时可以花金币（大本营要求先造齐新建筑）
+        global _th_pause_until
+        offense_first = time.time() < _th_pause_until
+        if TOWNHALL_FIRST and offense_first:
+            skip_gold = not gold_full(screenshot())  # 还是攒着金币，满了才花
+        elif TOWNHALL_FIRST:
             r = try_townhall(find_all, find_all_scaled, TPL, log)
-            if r == "fail":
-                log("大本营这轮没升成（可能被别的条件卡住），金币先留着")
-                skip_gold = True
+            full = gold_full(screenshot())
+            if r == "warned":
+                _th_pause_until = time.time() + TH_PAUSE
+                offense_first = True
+                log("先把训练营、部落城堡、实验室、兵种研究升上去，6 小时后再试升大本营")
+                skip_gold = not full
+            elif r == "locked":
+                log("大本营要先造齐新建筑才能升，先花金币造新建筑")
+                build_gold, skip_gold = True, not full
+            elif r == "fail":
+                if full:
+                    log("大本营这轮没升成，金币已经满了，先花金币升别的")
+                else:
+                    log("大本营这轮没升成（可能被别的条件卡住），金币先留着")
+                    skip_gold = True
             elif r == "poor":
-                if gold_full(screenshot()):
+                if full:
                     log("金币满了还不够升大本营，先花金币升别的（比如储金罐）")
                 else:
                     log("金币还不够升大本营，先攒着")
@@ -210,7 +271,7 @@ def one_round():
             time.sleep(random.uniform(1, 2))
         # 先造新建筑（城墙、防御塔），再升级已有建筑
         built = 0
-        while built < 30 and try_build_new(find_all, find_all_scaled, TPL, log, skip_gold):
+        while built < 30 and try_build_new(find_all, find_all_scaled, TPL, log, skip_gold and not build_gold):
             built += 1
             time.sleep(random.uniform(0.5, 1.5))
         while True:
@@ -218,21 +279,23 @@ def one_round():
             if no_free_builder(img):
                 break
             allow_walls = not CFG["walls_only_when_full"] or gold_full(img)
-            if not try_upgrade(find_all, find_all_scaled, TPL, log, skip_gold, allow_walls):
+            if not try_upgrade(find_all, find_all_scaled, TPL, log, skip_gold, allow_walls, offense_first):
                 break
             time.sleep(random.uniform(1, 2))
     global _last_lab
-    if RESEARCH and time.time() - _last_lab > LAB_INTERVAL:
-        _last_lab = time.time()
-        try_research(find_all, find_all_scaled, TPL, log)
+    if RESEARCH and not lab_busy(screenshot()) and time.time() - _last_lab > LAB_INTERVAL:
+        r = try_research(find_all, find_all_scaled, TPL, log)
+        _last_lab = 0 if r == "done" else time.time()  # 研究完了马上接着研究；没东西可研究就过一阵再看
         time.sleep(random.uniform(1, 2))
     if ATTACK:
-        fill_army(find_all, TPL, log)  # 人口上限涨了就补满
         img = screenshot()
         if storage_full(img):
             log("金币和圣水都满了，这轮不进攻")
         else:
-            attack(find_all, TPL, log, need_gold=not gold_full(img), need_elixir=not elixir_full(img))
+            plan, why = choose_plan()  # 自动配兵：几套方案轮流试，挑抢得最多的
+            log(f"这场用\"{plan}\"配兵（{why}）")
+            fill_army(find_all, TPL, log, plan)
+            attack(find_all, TPL, log, need_gold=not gold_full(img), need_elixir=not elixir_full(img), plan=plan)
 
     wait = random.randint(LOOP_MIN, LOOP_MAX)
     log(f"等待 {wait} 秒")
@@ -262,6 +325,9 @@ def main():
             size_ok = size is not None
         try:
             one_round()
+        except LoggedOut:
+            log("账号已掉线（停在登录界面，可能手机上登录了同一个账号），挂机已自动停止。登录回来后在控制面板点\"启动挂机\"")
+            return
         except Exception:  # 任何意外都不让脚本退出，记下来等一会儿再试
             log(f"出错了，{ERROR_WAIT} 秒后重试：\n{traceback.format_exc()}")
             time.sleep(ERROR_WAIT)
@@ -278,6 +344,12 @@ def run():
         main()
     except KeyboardInterrupt:
         log("已停止")
+    finally:
+        try:
+            if PID_FILE.read_text().strip() == str(os.getpid()):
+                PID_FILE.unlink()
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":

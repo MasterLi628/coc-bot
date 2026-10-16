@@ -6,7 +6,7 @@ from adbtool import ADB, device
 DEV = "/dev/input/event2"
 
 
-def _script(cx=640, cy=400, start=330, end=60, steps=12):
+def _script(cx=800, cy=450, start=400, end=70, steps=12):
     L = []
     e = lambda t, c, v: L.append(f"sendevent {DEV} {t} {c} {v}")
     syn = lambda: e(0, 0, 0)
@@ -29,13 +29,26 @@ def _script(cx=640, cy=400, start=330, end=60, steps=12):
     return "\n".join(L) + "\n"
 
 
+_pushed = False
+
+
 def pinch_out(times=1):
-    path = os.path.join(tempfile.gettempdir(), "pinch.sh")
-    with open(path, "w", newline="\n") as f:
-        f.write(_script())
-    subprocess.run([ADB, "-s", device(), "push", path, "/data/local/tmp/pinch.sh"], capture_output=True)
+    """双指捏合，把村庄画面缩小 times 次（缩到最小后再捏也没变化）。"""
+    global _pushed
+    from config import NO_WINDOW
+    dev = device()
+    if not dev:
+        return
+    if not _pushed:
+        path = os.path.join(tempfile.gettempdir(), "pinch.sh")
+        with open(path, "w", newline="\n") as f:
+            f.write(_script())
+        subprocess.run([ADB, "-s", dev, "push", path, "/data/local/tmp/pinch.sh"], capture_output=True,
+                       creationflags=NO_WINDOW)
+        _pushed = True
     for _ in range(times):
-        subprocess.run([ADB, "-s", device(), "shell", "sh", "/data/local/tmp/pinch.sh"], capture_output=True)
+        subprocess.run([ADB, "-s", dev, "shell", "sh", "/data/local/tmp/pinch.sh"], capture_output=True,
+                       creationflags=NO_WINDOW)
 
 
 if __name__ == "__main__":

@@ -14,14 +14,14 @@ SIZE = (14, 20)
 _DIGITS = {d: imread(DIGITS_DIR / f"{d}.png", cv2.IMREAD_GRAYSCALE).astype(float) for d in range(10)}
 
 
-def _read_row(img, y0, y1):
-    """读一行数字，读不出来返回 None。"""
-    roi = img[y0:y1, ROW_X[0]:ROW_X[1]]
+def read_number(roi):
+    """读一块区域里的白色数字（游戏里描黑边的那种字体），读不出来返回 None。
+    每个数字按连通块切开、缩放到同一大小再比对，所以字大一点小一点都能读。"""
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     m = ((hsv[..., 1] < 70) & (hsv[..., 2] > 200)).astype("uint8")
     n, _, st, _ = cv2.connectedComponentsWithStats(m)
     comps = sorted((st[i, 0], st[i, 1], st[i, 2], st[i, 3]) for i in range(1, n)
-                   if st[i, 3] >= 14 and st[i, 4] >= 25)
+                   if 13 <= st[i, 3] <= 30 and st[i, 4] >= 25)
     if not comps:
         return None
     text = ""
@@ -30,6 +30,11 @@ def _read_row(img, y0, y1):
         best = min(_DIGITS, key=lambda d: np.abs(_DIGITS[d] - g).mean())
         text += str(best)
     return int(text)
+
+
+def _read_row(img, y0, y1):
+    """读一行数字，读不出来返回 None。"""
+    return read_number(img[y0:y1, ROW_X[0]:ROW_X[1]])
 
 
 def read_loot(img):

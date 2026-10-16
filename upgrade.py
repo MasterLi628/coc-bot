@@ -13,11 +13,10 @@ import cv2
 import numpy as np
 
 from adbtool import screenshot, swipe, tap
-from config import BUILDINGS, NEVER_UPGRADE, TEMPLATES, imread, priority, save_debug
+from config import BUILDINGS, CFG, NEVER_UPGRADE, TEMPLATES, imread, priority, save_debug
 from menu import MENU_DX, read_rows
 
-DESELECT = (1580, 400)  # 地图右侧空地/树林，点了没副作用
-ROW_H = 48
+DESELECT = (1590, 340)  # 地图右侧空地/树林，点了没副作用（5 本后右边 y≈395~500 多了村民委托浮窗，别点到）
 X_SCALES = (0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5)
 
 
@@ -25,8 +24,16 @@ class Danger(Exception):
     """屏幕上出现了可能花宝石的窗口。"""
 
 
-def _green_count(hsv):
-    return int(((hsv[..., 0] >= 30) & (hsv[..., 0] <= 85) & (hsv[..., 1] > 120) & (hsv[..., 2] > 150)).sum())
+class Locked(Danger):
+    """升级条件没满足（"升级尚未解锁"窗口）。"""
+
+
+class Warned(Danger):
+    """"在您升级之前……"：游戏建议先升进攻方面再升大本营。"""
+
+
+# 游戏建议先升进攻时，这些建筑排到最前面（兵种研究在 lab.py 里本来就优先主力兵）
+OFFENSE = {"camp", "cc", "lab", "barracks"}
 
 
 def _red_count(hsv):
@@ -36,10 +43,6 @@ def _red_count(hsv):
 
 def _white_count(hsv):
     return int(((hsv[..., 1] < 40) & (hsv[..., 2] > 200)).sum())
-
-
-def _gold_count(hsv):
-    return int(((hsv[..., 0] >= 18) & (hsv[..., 0] <= 32) & (hsv[..., 1] > 150) & (hsv[..., 2] > 180)).sum())
 
 
 def _icon_is_gem(img, cx, cy):
@@ -87,20 +90,30 @@ def _safe_shot(find_all, tpl):
     return img
 
 
-def try_upgrade(find_all, find_all_scaled, tpl, log, skip_gold=False, allow_walls=False):
+_failed = {}               # 升不了的 (建筑, 资源, 价格) → 到什么时候之前不再试
+FAIL_COOLDOWN = 2 * 3600
+
+
+def try_upgrade(find_all, find_all_scaled, tpl, log, skip_gold=False, allow_walls=False, offense_first=False):
     """按升级优先级升一个现有建筑，成功返回 True。
     skip_gold：金币留着升大本营，只升花圣水的；allow_walls：允许升城墙（一般是金币满了）。"""
-    banned = set()  # 这一轮点了升不了的建筑，换下一个
+    now = time.time()
+    banned = {k for k, until in _failed.items() if until > now}  # 最近升不了的建筑，先跳过
     for _ in range(3):
         try:
-            r = _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned)
+            r = _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned, offense_first)
+        except Locked:
+            close_windows(find_all, find_all_scaled, tpl, log)
+            return False
         except Danger:
             log("出现可能花宝石的窗口，放弃本次升级")
             close_windows(find_all, find_all_scaled, tpl, log)
             return False
         if r is True or r is False:
             return r
-        banned.add(r)  # 返回的是升不了的那个 (建筑, 资源)
+        banned.add(r)  # 返回的是升不了的那个 (建筑, 资源, 价格)
+        _failed[r] = time.time() + FAIL_COOLDOWN
+        log(f"{BUILDINGS.get(r[0], '这个建筑')}暂时升不了（比如部落城堡还是废墟要先重建），2 小时内先不试")
         time.sleep(1)
     return False
 
@@ -125,7 +138,7 @@ def _open_menu(find_all, tpl):
 def _usable(row, skip_gold, allow_walls, banned):
     if row["new"] or row["red"] or row["cur"] not in ("gold", "elixir") or row["key"] in NEVER_UPGRADE:
         return False
-    if (row["key"], row["cur"]) in banned:
+    if (row["key"], row["cur"], row["price"]) in banned:
         return False
     if skip_gold and row["cur"] == "gold":
         return False
@@ -148,11 +161,27 @@ def _pages(find_all, tpl, mx):
         yield img, rows
 
 
-def _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned):
+def _sort_key(rule, rank, offense_first=False):
+    """按升级规则给菜单行排序，小的先升。
+    cheap：先升最便宜的——同一种建筑等级越低越便宜，这样低级的建筑会先被补上来；城墙永远排最后；
+    priority：按优先级列表，同一档里便宜的先升。
+    offense_first：游戏建议先升进攻时，OFFENSE 里的建筑排在所有建筑前面。"""
+    def key(r):
+        price = r["price"] if r["price"] is not None else 10 ** 9
+        first = offense_first and r["key"] in OFFENSE
+        if rule == "priority":
+            return (not first, rank(r["key"]), price)
+        return (not first, r["key"] == "wall", price, rank(r["key"]))
+    return key
+
+
+def _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned, offense_first=False):
     order = priority()
     rank = lambda k: order.index(k) if k in order else order.index("other")
+    key = _sort_key(CFG["upgrade_rule"], rank, offense_first)
+    ident = lambda r: (r["key"], r["cur"], r["price"])
 
-    # 第一遍：整个菜单看一遍，找优先级最高的买得起的建筑
+    # 第一遍：整个菜单看一遍，按升级规则挑最该升的买得起的建筑
     mx = _open_menu(find_all, tpl)
     if mx is None:
         log("工人菜单没打开")
@@ -160,15 +189,17 @@ def _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned):
     best = None
     for _, rows in _pages(find_all, tpl, mx):
         for r in rows:
-            if _usable(r, skip_gold, allow_walls, banned) and (best is None or rank(r["key"]) < rank(best[0])):
-                best = (r["key"], r["cur"])
+            if _usable(r, skip_gold, allow_walls, banned) and (best is None or key(r) < key(best)):
+                best = r
     tap(*DESELECT)
     time.sleep(1)
     if not best:
         log("没有买得起的升级" + ("（金币留着升大本营）" if skip_gold else ""))
         return False
-    name = BUILDINGS.get(best[0], "建筑")
-    log(f"按优先级升级：{name}（{'金币' if best[1] == 'gold' else '圣水'}）")
+    name = BUILDINGS.get(best["key"], "建筑")
+    price = f"{best['price']} " if best["price"] else ""
+    log(f"升级：{name}（{price}{'金币' if best['cur'] == 'gold' else '圣水'}）")
+    target = ident(best)
 
     # 第二遍：重新打开菜单，翻到这个建筑点它
     mx = _open_menu(find_all, tpl)
@@ -176,11 +207,11 @@ def _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned):
         return False
     for _, rows in _pages(find_all, tpl, mx):
         for r in rows:
-            if (r["key"], r["cur"]) == best and _usable(r, skip_gold, allow_walls, banned):
+            if ident(r) == target and _usable(r, skip_gold, allow_walls, banned):
                 tap(mx + 75, r["y"])
                 time.sleep(2)
                 res = _press_upgrade(find_all, tpl, log, name)
-                return best if res == "skip" else res
+                return target if res == "skip" else res
     log(f"第二遍没在菜单里找到{name}")
     tap(*DESELECT)
     return False
@@ -202,8 +233,38 @@ def _find_upgrade_btn(img, tpl):
     return best[1:] if best else None
 
 
+def green_confirm(find_all, tpl, img):
+    """确认窗口里绿色的"确认"按钮（花金币/圣水的那个），返回中心或 None。
+    有道具时旁边还会多一个灰色的"确认"（用建筑之锤/战斗之锤），那个是道具，永远不点。"""
+    best = None
+    for x, y in find_all(img, tpl["confirm_label"], 0.8):
+        hsv = cv2.cvtColor(img[y - 10:y + 70, x - 110:x + 110], cv2.COLOR_BGR2HSV)
+        green = ((hsv[..., 0] >= 30) & (hsv[..., 0] <= 50) & (hsv[..., 1] > 120) & (hsv[..., 2] > 180)).mean()
+        if green > 0.15 and (best is None or x > best[0]):
+            best = (x, y)
+    return best
+
+
+def check_confirm(find_all, tpl, log, img, name):
+    """检查确认窗口能不能点：要有绿色确认按钮、图标不是宝石、价格是白字。能点返回按钮中心，不能点抛 Danger。"""
+    confirm = green_confirm(find_all, tpl, img)
+    if not confirm:
+        log(f"{name}没出现确认窗口（截图存在 debug\\{name}_没出现确认窗口.png）")
+        save_debug(img, f"{name}_没出现确认窗口")
+        raise Danger  # 交给统一的关窗口逻辑
+    cx, cy = confirm
+    if _icon_is_gem(img, cx, cy):
+        log("确认按钮要花宝石，取消")
+        raise Danger
+    cost = cv2.cvtColor(img[cy + 28:cy + 62, cx - 80:cx + 40], cv2.COLOR_BGR2HSV)
+    if _white_count(cost) < 300:  # 买得起时价格是白字，红字/看不清都不点
+        log(f"{name}的价格不是白色（资源不够），取消")
+        raise Danger
+    return cx, cy
+
+
 def _press_upgrade(find_all, tpl, log, name):
-    """建筑已选中：点"升级"→检查→点"确认"。"""
+    """建筑已选中：点"升级"→检查→点"确认"。返回 True / "skip"（没有升级按钮）/ "locked"（升级条件没满足）。"""
     img = _safe_shot(find_all, tpl)
     btn = _find_upgrade_btn(img, tpl)
     if not btn:
@@ -215,28 +276,25 @@ def _press_upgrade(find_all, tpl, log, name):
     tap(btn[0], btn[1])
     time.sleep(1.5)
 
-    img = _safe_shot(find_all, tpl)
-    confirm = find_all(img, tpl["confirm_label"], 0.8)
-    if not confirm:
-        log(f"{name}没出现确认窗口（截图存在 debug\\{name}_没出现确认窗口.png）")
-        save_debug(img, f"{name}_没出现确认窗口")
-        raise Danger  # 交给统一的关窗口逻辑
-    cx, cy = confirm[0]
-    if _icon_is_gem(img, cx, cy):
-        log("确认按钮要花宝石，取消")
-        raise Danger
-    cost = cv2.cvtColor(img[cy + 28:cy + 62, cx - 80:cx + 40], cv2.COLOR_BGR2HSV)
-    if _white_count(cost) < 300:  # 买得起时价格是白字，红字/看不清都不点
-        log(f"{name}的价格不是白色（资源不够），取消")
-        raise Danger
+    cx, cy = check_confirm(find_all, tpl, log, _safe_shot(find_all, tpl), name)
     tap(cx + random.randint(-20, 20), cy + 30 + random.randint(-5, 5))
 
     # 弹窗有动画，分几次检查
     for _ in range(4):
         time.sleep(1)
         img = _safe_shot(find_all, tpl)
+    if find_all(img, tpl["th_warn"], 0.8):
+        # "在您升级之前……升级大本营后会匹配到更强的对手，建议先进行一些进攻方面的升级"：点取消（关窗口）
+        log(f"游戏建议先升进攻再升{name}，这次取消")
+        raise Warned
+    if find_all(img, tpl["th_locked"], 0.8):
+        # "升级尚未解锁：请先建造……"，一般是大本营要求先造齐新建筑
+        log(f"{name}升级条件没满足：要先造齐新建筑（截图存在 debug\\{name}_升级条件.png）")
+        save_debug(img, f"{name}_升级条件")
+        raise Locked
     if find_all(img, tpl["confirm_label"], 0.8) or find_all(img, tpl["close_x"], 0.8):
-        log("确认后窗口还在，当作失败处理")
+        log(f"确认后窗口还在，当作失败处理（截图存在 debug\\{name}_确认后窗口还在.png）")
+        save_debug(img, f"{name}_确认后窗口还在")
         raise Danger
     tap(*DESELECT)
     log(f"已开始升级{name}")
@@ -254,7 +312,7 @@ def _townhall_by_template(img, find_all_scaled):
     pts = []
     for f in sorted(TEMPLATES.glob("townhall_*.png")):
         t = imread(f)
-        for x, y in find_all_scaled(img[130:720, 120:1460], t, 0.7, (0.6, 0.7, 0.8, 0.9, 1.0, 1.15, 1.3)):
+        for x, y in find_all_scaled(img[130:720, 120:1460], t, 0.75, (0.45, 0.5, 0.55, 0.6, 0.7, 0.8, 0.9, 1.0, 1.15, 1.3)):
             pts.append((x + 120, y + 130))
     return pts
 
@@ -270,32 +328,65 @@ def _townhall_candidates(img, top=3):
 
 
 def try_townhall(find_all, find_all_scaled, tpl, log):
-    """尝试升级大本营。返回 "done"（已开始升级）/ "poor"（金币不够）/
-    "busy"（正在升级中）/ "fail"（没找到、被别的条件卡住等）。"""
+    """尝试升级大本营。返回 "done"（已开始升级）/ "poor"（金币不够）/ "busy"（正在升级中）/
+    "locked"（要先造齐新建筑）/ "warned"（游戏建议先升进攻）/ "fail"（没找到、出了别的窗口等）。"""
     try:
         return _try_townhall(find_all, find_all_scaled, tpl, log)
+    except Locked:
+        close_windows(find_all, find_all_scaled, tpl, log)
+        return "locked"
+    except Warned:
+        close_windows(find_all, find_all_scaled, tpl, log)
+        return "warned"
     except Danger:
         log("出现可能花宝石的窗口，放弃升级大本营")
         close_windows(find_all, find_all_scaled, tpl, log)
         return "fail"
 
 
-def _try_townhall(find_all, find_all_scaled, tpl, log):
-    """升级大本营。"""
+def _select_townhall_on_map(find_all, find_all_scaled, tpl):
+    """在画面里找大本营：先按各等级模板，再按橙色屋顶，点开看名字确认。选中了返回截图，否则 None。"""
     img = _safe_shot(find_all, tpl)
-    # 先按各等级大本营模板找，再按橙色屋顶找；点开看名字确认
     cands = _townhall_by_template(img, find_all_scaled)[:3] + _townhall_candidates(img)
     for x, y in cands:
         tap(x, y + 10)
         time.sleep(1.5)
         img = _safe_shot(find_all, tpl)
         if find_all(img, tpl["label_townhall"], 0.8):
-            break
+            return img
         tap(*DESELECT)
         time.sleep(0.8)
-    else:
-        log("没找到大本营（截图存在 debug\没找到大本营.png）")
-        save_debug(img, "没找到大本营")
+    return None
+
+
+def _focus_townhall_from_menu(find_all, tpl):
+    """镜头挪偏了、画面里没有大本营时：在工人菜单里点"大本营"那一行，镜头会移过去对准大本营。
+    点到了返回 True（正在升级时菜单里没有这一行，返回 False）。"""
+    mx = _open_menu(find_all, tpl)
+    if mx is None:
+        return False
+    for _, rows in _pages(find_all, tpl, mx):
+        for r in rows:
+            if r["key"] == "townhall":
+                tap(mx + 75, r["y"])
+                time.sleep(2)
+                return True
+    tap(*DESELECT)
+    return False
+
+
+def _try_townhall(find_all, find_all_scaled, tpl, log):
+    """升级大本营。"""
+    img = _select_townhall_on_map(find_all, find_all_scaled, tpl)
+    if img is None and _focus_townhall_from_menu(find_all, tpl):
+        img = _safe_shot(find_all, tpl)
+        if not find_all(img, tpl["label_townhall"], 0.8):  # 镜头移过去了但没选中，再在画面里找一次
+            tap(*DESELECT)
+            time.sleep(1)
+            img = _select_townhall_on_map(find_all, find_all_scaled, tpl)
+    if img is None:
+        log("没找到大本营（截图存在 debug\\没找到大本营.png）")
+        save_debug(_safe_shot(find_all, tpl), "没找到大本营")
         return "fail"
     btn = _find_upgrade_btn(img, tpl)
     if not btn:
@@ -305,27 +396,6 @@ def _try_townhall(find_all, find_all_scaled, tpl, log):
         tap(*DESELECT)
         return "poor"
     return "done" if _press_upgrade(find_all, tpl, log, "大本营") is True else "fail"
-
-
-def new_rows(img, mx, my, skip_gold=False):
-    """菜单里带绿色"新"字、买得起、而且不是用宝石付款的行。"""
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    rows = []
-    for k in range(1, 10):
-        y = my + ROW_H * k
-        if y + 25 > img.shape[0] - 230:  # 菜单底部被截断的行不要
-            break
-        xin = hsv[y - 5:y + 25, mx:mx + 25]
-        rest = hsv[y - 5:y + 25, mx + 30:mx + 80]
-        cost = hsv[y - 5:y + 25, mx + 250:mx + 355]
-        if _green_count(xin) < 100 or _green_count(rest) > 30:  # 不是"新"行（或是标题行）
-            continue
-        if _red_count(cost) > 30 or _gem_count(cost) > 30 or _white_count(cost) < 100:
-            continue  # 买不起 / 要花宝石 / 空
-        if skip_gold and _gold_count(cost) > 100:
-            continue
-        rows.append((mx + 75, y + 15))
-    return rows
 
 
 def _gem_count(hsv):
@@ -358,32 +428,6 @@ def _target_card(img):
                 return None
             return int(cents[k][0]), int(cents[k][1]) + 370
     return None
-
-
-def new_rows_scan(img, mx, skip_gold=False):
-    """菜单滚动后标题看不到了，直接按左侧绿色"新"字找行。mx 是菜单文字左边缘。"""
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    col = hsv[130:690, mx:mx + 25]
-    green = ((col[..., 0] >= 30) & (col[..., 0] <= 85) & (col[..., 1] > 120) & (col[..., 2] > 150)).sum(axis=1)
-    rows, y = [], 0
-    while y < len(green):
-        if green[y] >= 3:
-            y0 = y
-            while y < len(green) and green[y] >= 3:
-                y += 1
-            if y - y0 >= 12:  # 一行字的高度
-                cy = 130 + (y0 + y) // 2
-                rest = hsv[cy - 12:cy + 12, mx + 30:mx + 80]
-                cost = hsv[cy - 15:cy + 15, mx + 250:mx + 355]
-                if _green_count(rest) > 30:  # 整行都是绿字 = 标题
-                    continue
-                if _red_count(cost) > 30 or _gem_count(cost) > 30 or _white_count(cost) < 100:
-                    continue
-                if skip_gold and _gold_count(cost) > 100:
-                    continue
-                rows.append((mx + 75, cy))
-        y += 1
-    return rows
 
 
 def try_build_new(find_all, find_all_scaled, tpl, log, skip_gold=False):
@@ -425,31 +469,84 @@ def cancel_placement(img, tpl, log):
     return False
 
 
-def _try_build_new(find_all, tpl, log, skip_gold, pick=0):
-    img = _safe_shot(find_all, tpl)
-    icons = find_all(img, tpl["builder_icon"], 0.8)
-    if not icons:
-        return False
-    tap(*icons[0])
-    time.sleep(1.5)
+# 位置被挡住时，从游戏选的位置开始一格一格往外转圈挪，每挪一格就看一次能不能放下。
+# 默认缩放下一格地砖在屏幕上约是：往右下一格 (+22, +16.5)，往左下一格 (-22, +16.5)
+TILE = (22, 16.5)
+SAFE_BOX = (170, 170, 1420, 720)    # 建筑只在这个范围里挪，避开四周的按钮
+MAX_MOVES = 80
 
-    img = _safe_shot(find_all, tpl)
-    menu = find_all(img, tpl["menu_suggest"], 0.8)
-    if not menu:
-        tap(*DESELECT)
-        return False
-    th, tw = tpl["menu_suggest"].shape[:2]
-    mx = menu[0][0] - tw // 2
-    rows = new_rows(img, mx, menu[0][1] - th // 2, skip_gold)
-    if not rows:  # 新建筑常在菜单下面，往上滑一下再找
-        swipe(mx + 170, 620, mx + 170, 260, 600)
-        time.sleep(1.2)
+
+def _spiral(n):
+    """以 (0, 0) 为起点的方形螺旋（地砖坐标），相邻两点只差一格，越往后离起点越远。"""
+    i = j = 0
+    di, dj = 1, 0
+    run, pts = 1, []
+    while len(pts) < n:
+        for _ in range(2):
+            for _ in range(run):
+                i, j = i + di, j + dj
+                pts.append((i, j))
+            di, dj = -dj, di
+        run += 1
+    return pts[:n]
+
+
+def _drag_to_free(find_all, tpl, cancel, log):
+    """摆放模式下 ✓ 是灰的（位置不合法）：一格一格挪建筑，直到 ✓ 变绿。返回绿 ✓ 的位置或 None。"""
+    x0, y0 = cancel[0] + 40, cancel[1] + 70  # 按住 ✗ 和 ✓ 中间偏下（1 格的炸弹中心约 +58，3 格的建筑约 +90）
+    cx, cy = x0, y0
+    moves = 0
+    for i, j in _spiral(400):
+        tx, ty = x0 + (i - j) * TILE[0], y0 + (i + j) * TILE[1]
+        if not (SAFE_BOX[0] <= tx <= SAFE_BOX[2] and SAFE_BOX[1] <= ty <= SAFE_BOX[3]):
+            continue
         img = _safe_shot(find_all, tpl)
-        rows = new_rows_scan(img, mx, skip_gold)
-    if pick >= len(rows):
+        cur = _find_place(img, tpl, "place_cancel")
+        if not cur:  # 已经不在摆放模式了（误点了别的东西），马上停手
+            log("挪建筑时离开了摆放模式，停止")
+            return None
+        cx, cy = cur[0][0] + 40, cur[0][1] + 70
+        swipe(cx, cy, tx, ty, 500)
+        time.sleep(0.8)
+        ok = _find_place(_safe_shot(find_all, tpl), tpl, "place_ok")
+        moves += 1
+        if ok:
+            log(f"游戏选的位置被挡住了，挪了 {moves} 次找到能放的位置")
+            return ok
+        if moves >= MAX_MOVES:
+            break
+    log(f"挪了 {moves} 次还是放不下")
+    return None
+
+
+def _new_usable(row, skip_gold):
+    """带绿色"新"字、花金币/圣水（或者免费，比如升本送的城墙）、买得起的行（建筑工人小屋要宝石，不造）。"""
+    if not row["new"] or row["red"] or row["cur"] not in ("gold", "elixir", None) or row["key"] in NEVER_UPGRADE:
+        return False
+    return not (skip_gold and row["cur"] == "gold")
+
+
+def _try_build_new(find_all, tpl, log, skip_gold, pick=0):
+    # 菜单从头翻到尾，找第 pick 个能造的新建筑（新建筑常在菜单最下面）
+    mx = _open_menu(find_all, tpl)
+    if mx is None:
+        return False
+    seen, target = [], None
+    for _, rows in _pages(find_all, tpl, mx):
+        for r in rows:
+            ident = (r["key"], r["cur"], r["price"])
+            if not _new_usable(r, skip_gold) or ident in seen:
+                continue
+            if len(seen) == pick:
+                target = r
+                break
+            seen.append(ident)
+        if target:
+            break
+    if not target:
         tap(*DESELECT)
         return False
-    tap(*rows[pick])
+    tap(mx + 75, target["y"])
     time.sleep(2)
 
     # 打开商店，要造的建筑卡片是亮蓝色的，其他是灰色
@@ -461,24 +558,40 @@ def _try_build_new(find_all, tpl, log, skip_gold, pick=0):
     tap(*card)
     time.sleep(2)
 
-    img = _safe_shot(find_all, tpl)
-    ok = _find_place(img, tpl, "place_ok")
-    if not ok:
-        log("没进入摆放模式（截图存在 debug\没进入摆放模式.png）")
-        save_debug(img, "没进入摆放模式")
+    # 摆放：城墙、陷阱这类一次有好几个的，放下一个后游戏会自动拿出下一个，接着放
+    built = 0
+    for _ in range(10):
+        img = _safe_shot(find_all, tpl)
+        ok = _find_place(img, tpl, "place_ok")
         cancel = _find_place(img, tpl, "place_cancel")
-        if cancel:
-            tap(*cancel[0])
-        raise Danger
-    tap(*ok[0])
-    time.sleep(1.5)
-    _safe_shot(find_all, tpl)
-    if _find_place(screenshot(), tpl, "place_ok"):  # 位置不合法，✓ 还在
-        log("摆放位置不合法，取消")
-        cancel = _find_place(screenshot(), tpl, "place_cancel")
-        if cancel:
-            tap(*cancel[0])
-        return False
+        if not ok and cancel:  # ✓ 是灰的：游戏选的位置被挡住了，一格一格挪
+            ok = _drag_to_free(find_all, tpl, cancel[0], log)
+        if not ok:
+            if not built:
+                log("没进入摆放模式（截图存在 debug\\没进入摆放模式.png）")
+                save_debug(img, "没进入摆放模式")
+            cancel = _find_place(_safe_shot(find_all, tpl), tpl, "place_cancel")
+            if cancel:
+                tap(*cancel[0])
+            if not built:
+                raise Danger
+            break
+        tap(*ok[0])
+        time.sleep(1.5)
+        img = _safe_shot(find_all, tpl)
+        same = lambda a: a and abs(a[0][0] - ok[0][0]) < 15 and abs(a[0][1] - ok[0][1]) < 15
+        if same(_find_place(img, tpl, "place_ok")):  # 可能是动画还没播完，再等一下
+            time.sleep(1.5)
+            img = _safe_shot(find_all, tpl)
+        if same(_find_place(img, tpl, "place_ok")):
+            log("摆放位置不合法，取消")  # ✓ 还在原地：没放下去
+            cancel = _find_place(img, tpl, "place_cancel")
+            if cancel:
+                tap(*cancel[0])
+            break
+        built += 1
+        log("已建造一个新建筑")
+        if not _find_place(img, tpl, "place_cancel"):  # 没有下一个了
+            break
     tap(*DESELECT)
-    log("已建造一个新建筑")
-    return True
+    return built > 0

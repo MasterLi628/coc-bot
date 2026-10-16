@@ -20,19 +20,22 @@ DEFAULTS = {
     "loop_min": 20,            # 每轮间隔秒数（随机）
     "loop_max": 60,
     "max_not_home": 3,         # 连续几轮不在主界面就重启游戏
-    "min_gold": 5000,          # 金币没满时，对手金币达到这个数就打
-    "min_elixir": 5000,        # 圣水没满时，对手圣水达到这个数就打（两种都不够就换下一个）
-    "max_skips": 10,           # 最多换几个对手
+    "min_gold": 40000,         # 金币没满时，对手金币达到这个数就打
+    "min_elixir": 40000,       # 圣水没满时，对手圣水达到这个数就打（两种都不够就换下一个）
+    "max_skips": 20,           # 最多换几个对手（换一次只花几十到一两百金币，比打穷对手划算）
     "groups": 3,               # 兵分几个方向下
+    "upgrade_rule": "cheap",   # 升级规则：cheap＝均衡（先升最便宜的，也就是等级最低的）；priority＝按优先级列表
     "priority": [],            # 升级优先级（建筑代号，见 BUILDINGS）；空着用 DEFAULT_PRIORITY
     "walls_only_when_full": True,  # 城墙只在金币存满时才升
-    "research": True,          # 实验室自动研究
+    "research": True,          # 实验室自动研究（先研究最便宜的，也就是等级最低的兵种）
+    "close_action": "ask",     # 点控制面板的 ✕：ask＝每次问；tray＝退到后台；quit＝停止挂机并关闭
 }
+UPGRADE_RULES = {"cheap": "均衡：先升最便宜的（等级低的建筑先升）", "priority": "按下面的优先级列表"}
 
 # 工人菜单里的建筑：代号 → 名字。代号对应 templates/names/代号.png（菜单里的名字截图）
 BUILDINGS = {
     "goldsto": "储金罐", "esto": "圣水瓶",
-    "barracks": "兵营", "camp": "训练营", "lab": "实验室",
+    "barracks": "兵营", "camp": "训练营", "lab": "实验室", "spell": "法术工厂",
     "mortar": "迫击炮", "wizard": "法师塔", "airdef": "防空火箭", "archer": "箭塔", "cannon": "加农炮",
     "bomb": "隐形炸弹", "spring": "隐形弹簧",
     "mine": "金矿", "ecol": "圣水收集器",
@@ -41,7 +44,7 @@ BUILDINGS = {
     "wall": "城墙",
 }
 DEFAULT_PRIORITY = list(BUILDINGS)
-NEVER_UPGRADE = {"boat", "hut"}  # 帆船（会去建筑大师基地）、建筑工人小屋（要宝石）
+NEVER_UPGRADE = {"boat", "hut", "townhall"}  # 帆船（会去建筑大师基地）、建筑工人小屋（要宝石）；大本营单独处理（"大本营优先"）
 
 
 def priority(cfg=None):

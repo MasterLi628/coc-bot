@@ -23,13 +23,15 @@ NO_WINDOW = config.NO_WINDOW
 MAX_LINES = 3000          # 日志框最多保留多少行
 TAIL_BYTES = 30000        # 打开面板时先显示 bot.log 最后这么多内容
 
+CLOSE_ACTIONS = {"ask": "每次都问", "tray": "退到后台（挂机继续）", "quit": "关闭脚本（停止挂机并退出）"}
+
 NUMBERS = [  # (键, 名称, 说明)
     ("loop_min", "每轮最少等（秒）", ""),
     ("loop_max", "每轮最多等（秒）", ""),
     ("max_not_home", "几轮回不到村庄就重启游戏", ""),
     ("min_gold", "对手金币至少多少才打", "金币存满了就不看这一项"),
     ("min_elixir", "对手圣水至少多少才打", "圣水存满了就不看这一项；两种都不够就换下一个"),
-    ("max_skips", "最多换几个对手", "每换一次花 50 金币"),
+    ("max_skips", "最多换几个对手", "每换一次只花一点金币，换满了就将就打"),
     ("groups", "兵分几路", ""),
 ]
 
@@ -73,8 +75,10 @@ class App(tk.Tk):
         self.title("部落冲突挂机 - 控制面板")
         self.geometry("940x680")
         self.minsize(680, 460)
-        self.protocol("WM_DELETE_WINDOW", self.hide_to_tray if pystray else self.on_close)
+        self.protocol("WM_DELETE_WINDOW", self.on_x)
         self.log_pos = 0
+        self.last_line = ""
+        self.was_running = None
         self.tray = None
         self.tray_running = None
         self.tray_tipped = False
@@ -164,6 +168,10 @@ class App(tk.Tk):
         self.follow = tk.BooleanVar(value=True)
         ttk.Checkbutton(bar, text="自动滚到最新", variable=self.follow).pack(side="right", padx=8)
 
+        self.stats = ttk.Label(tab, text="", foreground="#2a6fb0", wraplength=900, justify="left")
+        self.stats.pack(fill="x", padx=8, pady=(0, 4))
+        self.stats_tick = 0
+
         frame = ttk.Frame(tab)
         frame.pack(fill="both", expand=True, padx=6, pady=(0, 6))
         self.text = tk.Text(frame, wrap="none", font=("Consolas", 10), bg="#1e1e1e", fg="#d4d4d4",
@@ -181,11 +189,12 @@ class App(tk.Tk):
         self.text.tag_configure("good", foreground="#7fd07f")
         self.text.bind("<Key>", lambda e: None if e.state & 4 else "break")  # 只读，但能 Ctrl+C 复制
 
-        ttk.Label(tab, text="挂机在后台运行。点右上角 ✕ 面板会缩到右下角托盘（挂机不停），右键托盘图标可以退出。日志同时保存在 bot.log"
-                  if pystray else "挂机在后台运行：这个面板可以最小化；关掉面板时会问要不要一起停止挂机。日志同时保存在 bot.log",
+        ttk.Label(tab, text="挂机在后台运行。点右上角 ✕ 会问是退到后台（挂机不停）还是关闭脚本。日志同时保存在 bot.log",
                   foreground="gray").pack(anchor="w", padx=6, pady=(0, 4))
 
     def append(self, chunk):
+        if chunk.strip():
+            self.last_line = chunk.strip().splitlines()[-1]
         at_bottom = self.text.yview()[1] > 0.999
         for line in chunk.splitlines(keepends=True):
             tag = ()
@@ -241,7 +250,37 @@ class App(tk.Tk):
             self.start_btn.state(["!disabled"])
             self.stop_btn.state(["disabled"])
         self.update_tray(bool(pid))
+        if self.stats_tick % 10 == 0:
+            self.refresh_stats()
+        self.stats_tick += 1
+        if self.was_running and not pid and "掉线" in self.last_line:
+            self.notify_logout()
+        self.was_running = bool(pid)
         self.after(1000, self.poll)
+
+    def refresh_stats(self):
+        """运行页顶上的今日战果（读 battles.csv）。"""
+        try:
+            import stats
+            d = stats.summary()
+        except Exception:
+            return
+        if not d["场数"] and not d["各配兵"]:
+            self.stats.config(text="今日战果：还没打过仗")
+            return
+        text = (f"今日战果：打了 {d['场数']} 场，抢到 金币 {d['金币']:,} / 圣水 {d['圣水']:,}，"
+                f"平均抢到对手的 {d['平均比例']:.0%}")
+        if d["各配兵"]:
+            text += "\n配兵成绩（最近 20 场平均抢到比例）：" + "，".join(
+                f"{k} {v[0]:.0%}（{v[1]} 场）" for k, v in sorted(d["各配兵"].items(), key=lambda t: -t[1][0]))
+        self.stats.config(text=text)
+
+    def notify_logout(self):
+        msg = "账号掉线了（可能手机上登录了同一个账号），挂机已自动停止。\n登录回来后点\"启动挂机\"继续。"
+        try:
+            self.tray.notify(msg, "部落冲突挂机")
+        except Exception:
+            messagebox.showwarning("账号掉线", msg)
 
     def start(self):
         if config.running_pid():
@@ -263,6 +302,65 @@ class App(tk.Tk):
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
         write_log("已停止（控制面板）")
 
+    def on_x(self):
+        """点了右上角 ✕：按设置退到后台或关闭，没设置就问。"""
+        action = config.load()["close_action"]
+        if action not in ("tray", "quit"):
+            action = self.ask_close()
+        if action == "tray":
+            self.hide_to_tray() if pystray else self.iconify()
+        elif action == "quit":
+            self.stop()
+            self.quit_app()
+
+    def ask_close(self):
+        """弹窗问：退到后台 / 关闭脚本 / 取消。返回 "tray" / "quit" / None。"""
+        win = tk.Toplevel(self)
+        win.title("关闭")
+        win.resizable(False, False)
+        win.transient(self)
+        result = {"v": None}
+        remember = tk.BooleanVar(value=False)
+        running = bool(config.running_pid())
+        ttk.Label(win, text="要退到后台，还是关闭脚本？", font=("Microsoft YaHei UI", 11, "bold")).pack(
+            anchor="w", padx=16, pady=(14, 4))
+        ttk.Label(win, text=("退到后台：面板缩到右下角托盘，挂机继续运行\n" if pystray else
+                             "退到后台：面板最小化，挂机继续运行\n")
+                  + "关闭脚本：停止挂机" + ("（正在运行）" if running else "") + "，并关掉这个软件",
+                  foreground="gray", justify="left").pack(anchor="w", padx=16)
+        ttk.Checkbutton(win, text="记住我的选择，下次不再问（可以在\"设置\"里改回来）", variable=remember).pack(
+            anchor="w", padx=16, pady=(10, 0))
+
+        def done(v):
+            result["v"] = v
+            if v and remember.get():
+                cfg = config.load()
+                cfg["close_action"] = v
+                config.save(cfg)
+                self.close_action.set(CLOSE_ACTIONS[v])
+            win.destroy()
+
+        bar = ttk.Frame(win)
+        bar.pack(fill="x", padx=16, pady=14)
+        ttk.Button(bar, text="退到后台", command=lambda: done("tray")).pack(side="left")
+        ttk.Button(bar, text="关闭脚本", command=lambda: done("quit")).pack(side="left", padx=8)
+        ttk.Button(bar, text="取消", command=lambda: done(None)).pack(side="right")
+        win.protocol("WM_DELETE_WINDOW", lambda: done(None))
+        win.bind("<Escape>", lambda e: done(None))
+        win.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - win.winfo_width()) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - win.winfo_height()) // 3
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        win.grab_set()
+        win.focus_force()
+        self.wait_window(win)
+        return result["v"]
+
+    def quit_app(self):
+        if self.tray:
+            self.tray.stop()
+        self.destroy()
+
     def on_close(self):
         if config.running_pid():
             ans = messagebox.askyesnocancel(
@@ -272,9 +370,7 @@ class App(tk.Tk):
                 return
             if ans:
                 self.stop()
-        if self.tray:
-            self.tray.stop()
-        self.destroy()
+        self.quit_app()
 
     # ================= 设置页 =================
     def build_settings(self, tab):
@@ -309,7 +405,7 @@ class App(tk.Tk):
         ttk.Checkbutton(box2, text="自动进攻抢资源", variable=self.attack).grid(row=0, column=0, sticky="w", **pad)
         ttk.Checkbutton(box2, text="大本营优先（平时攒金币，够了先升大本营）", variable=self.th_first).grid(
             row=0, column=1, columnspan=2, sticky="w", **pad)
-        ttk.Checkbutton(box2, text="实验室自动研究（每 30 分钟看一次）", variable=self.research).grid(
+        ttk.Checkbutton(box2, text="实验室自动研究（先研究最便宜的，也就是等级低的兵种）", variable=self.research).grid(
             row=1, column=0, columnspan=3, sticky="w", **pad)
         self.nums = {}
         for r, (key, name, tip) in enumerate(NUMBERS, start=2):
@@ -318,6 +414,11 @@ class App(tk.Tk):
             ttk.Entry(box2, textvariable=v, width=10).grid(row=r, column=1, sticky="w", **pad)
             ttk.Label(box2, text=tip, foreground="gray").grid(row=r, column=2, sticky="w", **pad)
             self.nums[key] = v
+        r = len(NUMBERS) + 2
+        ttk.Label(box2, text="点面板右上角 ✕ 时").grid(row=r, column=0, sticky="w", **pad)
+        self.close_action = tk.StringVar(value=CLOSE_ACTIONS.get(cfg["close_action"], CLOSE_ACTIONS["ask"]))
+        ttk.Combobox(box2, textvariable=self.close_action, values=list(CLOSE_ACTIONS.values()), state="readonly",
+                     width=24).grid(row=r, column=1, columnspan=2, sticky="w", **pad)
 
         bar = ttk.Frame(tab)
         bar.pack(fill="x", padx=6, pady=8)
@@ -327,19 +428,24 @@ class App(tk.Tk):
                   foreground="gray").pack(anchor="w", padx=6)
 
     def build_priority(self, parent, cfg):
-        box = ttk.LabelFrame(parent, text="升级优先级（越靠上越先升）")
+        box = ttk.LabelFrame(parent, text="升级规则")
         box.pack(side="left", fill="y", padx=(8, 0))
+        self.rule = tk.StringVar(value=cfg["upgrade_rule"] if cfg["upgrade_rule"] in config.UPGRADE_RULES else "cheap")
+        for i, (k, text) in enumerate(config.UPGRADE_RULES.items()):
+            ttk.Radiobutton(box, text=text, value=k, variable=self.rule).grid(
+                row=i, column=0, columnspan=2, sticky="w", padx=8, pady=(6 if i == 0 else 0, 0))
         self.order = config.priority(cfg)
-        self.prio = tk.Listbox(box, height=15, width=24, activestyle="none", exportselection=False)
-        self.prio.grid(row=0, column=0, rowspan=4, padx=(8, 4), pady=6, sticky="ns")
-        ttk.Button(box, text="↑ 上移", width=8, command=lambda: self.move(-1)).grid(row=0, column=1, padx=4, pady=(6, 2))
-        ttk.Button(box, text="↓ 下移", width=8, command=lambda: self.move(1)).grid(row=1, column=1, padx=4, pady=2)
-        ttk.Button(box, text="默认顺序", width=8, command=self.reset_order).grid(row=2, column=1, padx=4, pady=2)
+        self.prio = tk.Listbox(box, height=12, width=24, activestyle="none", exportselection=False)
+        self.prio.grid(row=2, column=0, rowspan=4, padx=(8, 4), pady=6, sticky="ns")
+        ttk.Button(box, text="↑ 上移", width=8, command=lambda: self.move(-1)).grid(row=2, column=1, padx=4, pady=(6, 2))
+        ttk.Button(box, text="↓ 下移", width=8, command=lambda: self.move(1)).grid(row=3, column=1, padx=4, pady=2)
+        ttk.Button(box, text="默认顺序", width=8, command=self.reset_order).grid(row=4, column=1, padx=4, pady=2)
         self.walls_full = tk.BooleanVar(value=cfg["walls_only_when_full"])
         ttk.Checkbutton(box, text="城墙只在金币存满时才升", variable=self.walls_full).grid(
-            row=4, column=0, columnspan=2, sticky="w", padx=8)
-        ttk.Label(box, text="大本营由左边\"大本营优先\"控制，\n帆船、建筑工人小屋永远不升", foreground="gray",
-                  justify="left").grid(row=5, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 6))
+            row=6, column=0, columnspan=2, sticky="w", padx=8)
+        ttk.Label(box, text="均衡：价格一样时按列表顺序；城墙永远排最后\n列表：越靠上越先升，同一档里便宜的先升\n"
+                            "大本营由左边\"大本营优先\"控制，\n帆船、建筑工人小屋永远不升", foreground="gray",
+                  justify="left").grid(row=7, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 6))
         self.fill_order()
 
     def fill_order(self, select=None):
@@ -403,6 +509,8 @@ class App(tk.Tk):
         for k, v in self.nums.items():
             v.set(str(d[k]))
         self.walls_full.set(d["walls_only_when_full"])
+        self.rule.set(d["upgrade_rule"])
+        self.close_action.set(CLOSE_ACTIONS[d["close_action"]])
         self.reset_order()
 
     def collect(self):
@@ -419,6 +527,8 @@ class App(tk.Tk):
         cfg["research"] = self.research.get()
         cfg["priority"] = list(self.order)
         cfg["walls_only_when_full"] = self.walls_full.get()
+        cfg["upgrade_rule"] = self.rule.get()
+        cfg["close_action"] = next((k for k, v in CLOSE_ACTIONS.items() if v == self.close_action.get()), "ask")
         for key, name, _ in NUMBERS:
             try:
                 n = int(self.nums[key].get())

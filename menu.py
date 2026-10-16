@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from config import TEMPLATES, imread
+from scout import read_number
 
 MENU_DX = -106            # 菜单左边 = 工人图标中心 x + MENU_DX
 MENU_Y = (128, 688)       # 菜单面板里能看到行的 y 范围
@@ -39,11 +40,12 @@ def _name_of(mask):
 
 
 def read_rows(img, mx):
-    """当前看得到的每一行：dict(y, key, new, cur, red)。
+    """当前看得到的每一行：dict(y, key, new, cur, red, price)。
     key：建筑（templates/names 里的文件名），认不出是 None；
     new：绿色"新"字（要摆放的新建筑）；
     cur："gold" / "elixir" / "gem" / None（免费、升级中的倒计时等）；
-    red：价格是红字（资源不够）。"""
+    red：价格是红字（资源不够）；
+    price：价格数字（红字、免费、倒计时读不出来，是 None）。"""
     y0, y1 = MENU_Y
     white = _white(img[y0:y1, mx + 4:mx + 235])
     lines = white.sum(1) > 2
@@ -65,5 +67,7 @@ def read_rows(img, mx):
         gold, elixir, gem = _count(cost, 18, 32, 150, 180), _count(cost, 138, 165, 100, 150), _count(cost, 36, 80)
         red = _count(cost, 0, 8, 120, 150) + _count(cost, 172, 180, 120, 150) > 30
         cur = max((gold, "gold"), (elixir, "elixir"), (gem, "gem"))
-        rows.append({"y": (a + b) // 2, "key": key, "new": new, "cur": cur[1] if cur[0] > 40 else None, "red": red})
+        cur = cur[1] if cur[0] > 40 else None
+        price = read_number(img[a - 6:b + 6, mx + 235:mx + 365]) if cur in ("gold", "elixir") and not red else None
+        rows.append({"y": (a + b) // 2, "key": key, "new": new, "cur": cur, "red": red, "price": price})
     return rows
