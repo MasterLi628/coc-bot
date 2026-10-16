@@ -1,0 +1,284 @@
+"""部落冲突自动发育脚本：收资源 + 自动升级 + 自动进攻 + 掉线恢复。
+
+用法：双击"启动挂机.bat"，或者 python bot.py
+关掉窗口或按 Ctrl+C 停止。运行期间不要手动操作模拟器。
+日志同时写到同目录的 bot.log。
+"""
+import os
+import random
+import sys
+import subprocess
+import time
+import traceback
+
+import cv2
+
+from adbtool import ADB, adb, device, screen_size, screenshot, tap
+import config
+from config import CFG, PID_FILE, running_pid
+from attack import attack, fill_army
+from lab import try_research
+from upgrade import DESELECT, cancel_placement, close_windows, danger_on_screen, try_build_new, try_townhall, try_upgrade
+
+TEMPLATES = config.TEMPLATES
+LOG_FILE = config.BASE / "bot.log"
+THRESHOLD = 0.85
+PACKAGE = "com.tencent.tmgp.supercell.clashofclans"
+# 下面四项在"挂机控制面板.bat"里改（存在 config.json）
+ATTACK = CFG["attack"]                          # 是否自动进攻
+TOWNHALL_FIRST = CFG["townhall_first"]          # 大本营优先：钱够先升大本营，钱不够时只花圣水、攒金币
+LOOP_MIN, LOOP_MAX = CFG["loop_min"], CFG["loop_max"]  # 每轮间隔秒数（随机）
+MAX_NOT_HOME = CFG["max_not_home"]              # 连续几轮不在主界面就重启游戏
+RESEARCH = CFG["research"]                      # 实验室自动研究
+LAB_INTERVAL = 1800                             # 每隔多少秒看一次实验室
+ERROR_WAIT = 60               # 出错后等多少秒再重试
+LOGIN_WAIT = 300              # 账号掉线（停在登录界面）时每隔多少秒检查一次
+
+
+def load(name):
+    return config.imread(TEMPLATES / f"{name}.png")
+
+
+TPL = {name: load(name) for name in [
+    "home_attack", "collect_gold", "collect_elixir",
+    "builder_icon", "menu_suggest", "btn_upgrade", "confirm_label", "close_x",
+    "btn_search", "btn_army_attack", "btn_next", "btn_return",
+    "popup_busy", "gem_icon", "builders_zero", "townhall", "label_townhall",
+    "shop_arrow", "place_ok", "place_cancel", "event_back", "popup_nogem", "btn_claim",
+    "btn_continue", "army_not_full", "redline_msg",
+    "web_back", "login_screen", "label_lab", "btn_research", "lab_title",
+]}
+
+
+def find_all(img, tpl, threshold=THRESHOLD):
+    """返回所有匹配位置的中心点（已去重）。"""
+    h, w = tpl.shape[:2]
+    res = cv2.matchTemplate(img, tpl, cv2.TM_CCOEFF_NORMED)
+    ys, xs = (res >= threshold).nonzero()
+    points = []
+    for x, y in sorted(zip(xs, ys), key=lambda p: -res[p[1], p[0]]):
+        cx, cy = x + w // 2, y + h // 2
+        if all(abs(cx - px) > w or abs(cy - py) > h for px, py in points):
+            points.append((cx, cy))
+    return points
+
+
+def find_all_scaled(img, tpl, threshold=THRESHOLD, scales=(0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.35, 1.5, 1.65)):
+    """多尺寸匹配，应对画面缩放。"""
+    points = []
+    for s in scales:
+        t = cv2.resize(tpl, None, fx=s, fy=s)
+        for cx, cy in find_all(img, t, threshold):
+            if all(abs(cx - px) > 20 or abs(cy - py) > 20 for px, py in points):
+                points.append((cx, cy))
+    return points
+
+
+def jitter(v, r=4):
+    return v + random.randint(-r, r)
+
+
+def log(msg):
+    line = f"{time.strftime('[%m-%d %H:%M:%S]')} {msg}"
+    if sys.stdout:  # 打包成 exe 后台运行时没有控制台
+        print(line, flush=True)
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+def is_home(img):
+    if find_all(img[60:180, 40:160], TPL["event_back"], 0.8):  # 活动广告盖在主界面上
+        return False
+    return bool(find_all(img, TPL["home_attack"], 0.8))
+
+
+def collect(img):
+    count = 0
+    for name in ["collect_gold", "collect_elixir"]:
+        for x, y in find_all_scaled(img, TPL[name]):
+            tap(jitter(x), jitter(y))
+            count += 1
+            time.sleep(random.uniform(0.4, 1.0))
+    if count:
+        tap(*DESELECT)
+    return count
+
+
+def no_free_builder(img):
+    """顶部工人数是不是 0/x。"""
+    return bool(find_all(img[0:100], TPL["builders_zero"], 0.85))
+
+
+def gold_full(img):
+    """金币是否满了（看资源条最左端那一小截有没有被填满）。"""
+    h, s, _ = (int(v) for v in cv2.cvtColor(img[50:51, 1266:1267], cv2.COLOR_BGR2HSV)[0, 0])
+    return 20 <= h <= 28 and s > 220
+
+
+def elixir_full(img):
+    h, s, _ = (int(v) for v in cv2.cvtColor(img[122:123, 1290:1291], cv2.COLOR_BGR2HSV)[0, 0])
+    return 135 <= h <= 165 and s > 70  # 圣水条满时这里是紫色
+
+
+def storage_full(img):
+    """金币和圣水是否都满了。"""
+    return gold_full(img) and elixir_full(img)
+
+
+def recover(img):
+    """不在主界面时先尝试点回营/关窗口。"""
+    # 战斗结算的"回营"/"领取奖励"、开宝箱后的"继续"、活动广告的返回箭头
+    # 还有游戏内网页（公告等）底部的"返回游戏"
+    for name in ["btn_return", "btn_claim", "btn_continue", "event_back", "web_back"]:
+        pts = find_all(img, TPL[name], 0.8)
+        if pts:
+            tap(*pts[0])
+            return True
+    return close_windows(find_all, find_all_scaled, TPL, log)
+
+
+def restart_game():
+    if find_all(screenshot(), TPL["login_screen"], 0.8):
+        return False  # 在登录界面重启也没用
+    log("重启游戏")
+    adb("shell", "am", "force-stop", PACKAGE)
+    time.sleep(3)
+    adb("shell", "monkey", "-p", PACKAGE, "-c", "android.intent.category.LAUNCHER", "1")
+    for _ in range(40):
+        time.sleep(3)
+        if is_home(screenshot()):
+            log("已重新进入村庄")
+            return True
+    log("重启后 2 分钟还没进村庄")
+    return False
+
+
+def emulator_online():
+    return device() is not None
+
+
+_not_home = 0
+_last_lab = 0
+
+
+def one_round():
+    global _not_home
+    img = screenshot()
+    if find_all(img, TPL["login_screen"], 0.8):
+        # 一般是同一个账号在手机上登录，把模拟器挤下线了；登录要本人操作，脚本只等着
+        log(f"账号已掉线，停在登录界面，需要手动登录（可能手机上登录了同一个账号）。{LOGIN_WAIT} 秒后再看")
+        time.sleep(LOGIN_WAIT)
+        return
+    if danger_on_screen(find_all, TPL, img):
+        log("屏幕上有可能花宝石的窗口，先关掉")
+        close_windows(find_all, find_all_scaled, TPL, log)
+        return
+    if not is_home(img):
+        _not_home += 1
+        log(f"不在村庄主界面（第 {_not_home} 次）")
+        if not recover(img) and _not_home >= MAX_NOT_HOME:
+            restart_game()
+            _not_home = 0
+        time.sleep(5)
+        return
+    _not_home = 0
+    if cancel_placement(img, TPL, log):
+        time.sleep(1)
+        return
+
+    n = collect(img)
+    log(f"收集了 {n} 个资源" if n else "暂无可收集资源")
+    time.sleep(random.uniform(1, 2))
+    if no_free_builder(screenshot()):
+        log("工人都在忙，跳过升级")
+    else:
+        skip_gold = False
+        if TOWNHALL_FIRST:
+            r = try_townhall(find_all, find_all_scaled, TPL, log)
+            if r == "fail":
+                log("大本营这轮没升成（可能被别的条件卡住），金币先留着")
+                skip_gold = True
+            elif r == "poor":
+                if gold_full(screenshot()):
+                    log("金币满了还不够升大本营，先花金币升别的（比如储金罐）")
+                else:
+                    log("金币还不够升大本营，先攒着")
+                    skip_gold = True
+            time.sleep(random.uniform(1, 2))
+        # 先造新建筑（城墙、防御塔），再升级已有建筑
+        built = 0
+        while built < 30 and try_build_new(find_all, find_all_scaled, TPL, log, skip_gold):
+            built += 1
+            time.sleep(random.uniform(0.5, 1.5))
+        while True:
+            img = screenshot()
+            if no_free_builder(img):
+                break
+            allow_walls = not CFG["walls_only_when_full"] or gold_full(img)
+            if not try_upgrade(find_all, find_all_scaled, TPL, log, skip_gold, allow_walls):
+                break
+            time.sleep(random.uniform(1, 2))
+    global _last_lab
+    if RESEARCH and time.time() - _last_lab > LAB_INTERVAL:
+        _last_lab = time.time()
+        try_research(find_all, find_all_scaled, TPL, log)
+        time.sleep(random.uniform(1, 2))
+    if ATTACK:
+        fill_army(find_all, TPL, log)  # 人口上限涨了就补满
+        img = screenshot()
+        if storage_full(img):
+            log("金币和圣水都满了，这轮不进攻")
+        else:
+            attack(find_all, TPL, log, need_gold=not gold_full(img), need_elixir=not elixir_full(img))
+
+    wait = random.randint(LOOP_MIN, LOOP_MAX)
+    log(f"等待 {wait} 秒")
+    time.sleep(wait)
+
+
+def main():
+    log("脚本启动")
+    size_ok = False
+    while True:
+        if not ADB:
+            log(f"找不到雷电模拟器的 adb.exe，请在控制面板的\"设置\"里填写。{ERROR_WAIT} 秒后重试")
+            time.sleep(ERROR_WAIT)
+            continue
+        if not emulator_online():
+            log(f"连不上模拟器，请确认雷电模拟器已打开。{ERROR_WAIT} 秒后重试")
+            size_ok = False
+            time.sleep(ERROR_WAIT)
+            continue
+        if not size_ok:
+            size = screen_size()
+            if size and size != (1600, 900):
+                log(f"模拟器分辨率是 {size[0]}x{size[1]}，必须改成 1600x900（雷电设置→性能设置→分辨率），"
+                    f"否则什么都认不出来。{ERROR_WAIT} 秒后再查")
+                time.sleep(ERROR_WAIT)
+                continue
+            size_ok = size is not None
+        try:
+            one_round()
+        except Exception:  # 任何意外都不让脚本退出，记下来等一会儿再试
+            log(f"出错了，{ERROR_WAIT} 秒后重试：\n{traceback.format_exc()}")
+            time.sleep(ERROR_WAIT)
+
+
+def run():
+    """入口：防重复启动、记下进程号，然后一直挂机。"""
+    other = running_pid()
+    if other:
+        log(f"已经有一个挂机在运行（进程 {other}），这个不启动了。要重开请先在控制面板点\"停止\"")
+        raise SystemExit(1)
+    PID_FILE.write_text(str(os.getpid()))
+    try:
+        main()
+    except KeyboardInterrupt:
+        log("已停止")
+
+
+if __name__ == "__main__":
+    run()
