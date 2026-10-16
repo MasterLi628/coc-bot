@@ -1,0 +1,6 @@
+opencv-python
+customtkinter
+numpy
+pystray
+pillow
+pyinstaller   # 只有打包成 exe 时需要

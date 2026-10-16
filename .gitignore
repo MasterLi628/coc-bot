@@ -6,3 +6,4 @@ build/
 bot.log
 config.json
 debug/
+battles.csv
