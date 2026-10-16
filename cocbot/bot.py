@@ -24,9 +24,10 @@ from .upgrade import DESELECT, cancel_placement, close_windows, danger_on_screen
 
 TEMPLATES = config.TEMPLATES
 LOG_FILE = config.BASE / "bot.log"
+LOG_MAX = 2 * 1024 * 1024     # bot.log 超过这么大就改名成 bot.old.log（只留上一份），重新开一个
 THRESHOLD = 0.85
 PACKAGE = "com.tencent.tmgp.supercell.clashofclans"
-# 下面四项在"挂机控制面板.bat"里改（存在 config.json）
+# 下面几项在控制面板的"设置"页改（存在 config.json）
 ATTACK = CFG["attack"]                          # 是否自动进攻
 TOWNHALL_FIRST = CFG["townhall_first"]          # 大本营优先：钱够先升大本营，钱不够时只花圣水、攒金币
 LOOP_MIN, LOOP_MAX = CFG["loop_min"], CFG["loop_max"]  # 每轮间隔秒数（随机）
@@ -83,6 +84,11 @@ def log(msg):
     line = f"{time.strftime('[%m-%d %H:%M:%S]')} {msg}"
     if sys.stdout:  # 打包成 exe 后台运行时没有控制台
         print(line, flush=True)
+    try:
+        if LOG_FILE.stat().st_size > LOG_MAX:
+            os.replace(LOG_FILE, LOG_FILE.with_name("bot.old.log"))
+    except OSError:
+        pass
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")

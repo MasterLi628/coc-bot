@@ -4,6 +4,7 @@ dist/
 build/
 *.spec
 bot.log
+bot.old.log
 config.json
 debug/
 battles.csv
