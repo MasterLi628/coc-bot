@@ -19,6 +19,10 @@ PLANS = {
     "哥布林多": [("giant", 0.22), ("breaker", 0.07), ("archer", 0.25), ("goblin", 0.35)],
     "巨人多": [("giant", 0.40), ("breaker", 0.09), ("archer", 0.30), ("goblin", 0.10)],
     "弓箭手多": [("giant", 0.22), ("breaker", 0.07), ("archer", 0.45), ("goblin", 0.16)],
+    # 新兵种（人口大，按比例算出来的个数会四舍五入）。115 人口时：
+    "戈仑图腾": [("witchgolem", 0.72), ("totem", 0.25)],                       # 女巫戈仑2、图腾投手1
+    "骷髅巨人": [("skelgiant", 0.35), ("totem", 0.25), ("archer", 0.20)],      # 骷髅巨人2、图腾投手1、弓箭手23
+    "戈仑骷髅": [("witchgolem", 0.36), ("skelgiant", 0.35), ("totem", 0.25)],  # 女巫戈仑1、骷髅巨人2、图腾投手1
 }
 MIN_TRIES = 5      # 每套至少试几场
 EXPLORE = 0.2      # 试满以后，还有多大概率换一套试试
@@ -67,16 +71,20 @@ def plan_scores():
     return {k: (sum(v[-RECENT:]) / len(v[-RECENT:]) if v else 0.0, len(v)) for k, v in by.items()}
 
 
-def choose_plan():
-    """挑这一场用哪套配兵，返回 (方案名, 原因)。"""
+def choose_plan(available=None):
+    """挑这一场用哪套配兵，返回 (方案名, 原因)。available：现在有哪些兵种（None＝不知道），
+    方案里的兵种不全的不选；一套都配不出来就不挑了，照常在所有方案里选。"""
     scores = plan_scores()
+    if available is not None:
+        ok = {k: v for k, v in scores.items() if all(t in available for t, _ in PLANS[k])}
+        scores = ok or scores
     untried = [k for k, (_, n) in scores.items() if n < MIN_TRIES]
     if untried:
         k = min(untried, key=lambda k: scores[k][1])
         return k, f"还在试，这套打了 {scores[k][1]} 场"
     best = max(scores, key=lambda k: scores[k][0])
     if random.random() < EXPLORE:
-        k = random.choice([k for k in PLANS if k != best])
+        k = random.choice([k for k in scores if k != best] or [best])
         return k, f"偶尔换着试（目前最好的是{best}）"
     return best, f"成绩最好，平均抢到 {scores[best][0]:.0%}"
 

@@ -115,14 +115,15 @@ def line_tag(line):
     """日志行的颜色：err 出错 / warn 要注意 / good 做成了一件事 / "" 普通。"""
     if any(k in line for k in ("出错", "Traceback", "Error", "连不上", "找不到", "掉线")):
         return "err"
-    if any(k in line for k in ("宝石", "分辨率", "重启", "没找到", "放弃", "不在村庄", "建议先升进攻")):
+    if any(k in line for k in ("宝石", "分辨率", "重启", "没找到", "放弃", "不在村庄", "建议先升进攻", "新兵种")):
         return "warn"
     if any(k in line for k in ("开打", "本场抢到", "已开始", "已建造", "启动", "已重新进入")):
         return "good"
     return ""
 
 
-EVENT_KEYS = ("本场抢到", "已开始升级", "已开始研究", "已建造", "账号已掉线", "出错了", "重启游戏", "建议先升进攻")
+EVENT_KEYS = ("本场抢到", "已开始升级", "已开始研究", "已建造", "账号已掉线", "出错了", "重启游戏", "建议先升进攻",
+              "发现新兵种")
 
 
 def split_time(line):
@@ -598,6 +599,8 @@ class App(ctk.CTk):
             if size > self.log_pos:
                 text, self.log_pos = self.read_log(self.log_pos)
                 self.append(text)
+                if "发现新兵种" in text:
+                    self.notify_new_troop()
         except OSError:
             pass
         pid = config.running_pid()
@@ -620,6 +623,14 @@ class App(ctk.CTk):
             self.tray.notify(msg, "部落冲突挂机")
         except Exception:
             messagebox.showwarning("账号掉线", msg)
+
+    def notify_new_troop(self):
+        msg = ("兵种编辑里出现了认不出的兵种（新出的或者换了样子），脚本暂时不用它们，别的照常。\n"
+               "截图在 debug\\新兵种.png，找 Claude 补上就能用。")
+        try:
+            self.tray.notify(msg, "部落冲突挂机")
+        except Exception:
+            messagebox.showinfo("发现新兵种", msg)
 
     def start(self):
         if config.running_pid():

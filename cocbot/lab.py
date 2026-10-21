@@ -11,7 +11,7 @@ import cv2
 from .adbtool import screenshot, tap
 from .config import TEMPLATES, imread, save_debug
 from .scout import read_number
-from .upgrade import DESELECT, Danger, _open_menu, _pages, _safe_shot, check_confirm, close_windows
+from .upgrade import DESELECT, Danger, _open_menu, _pages, _safe_shot, check_confirm, close_menu, close_windows
 
 BTN_SCALES = (0.8, 0.85, 0.9, 0.95, 1.0, 1.05)
 # 研究窗口里兵种卡片的中心（2 行 x 6 列）和半宽高
@@ -83,7 +83,8 @@ def _card_price(img, x, y):
 def _lab_by_tag(img, find_all_scaled):
     """实验室空闲时头顶有个虚线框的"研究"字样，实验室就在它正下方。"""
     tag = imread(TEMPLATES / "lab_idle_tag.png")
-    return [(x, y + 55) for x, y in find_all_scaled(img, tag, 0.75, (0.5, 0.55, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25))]
+    scales = [s / 100 for s in range(60, 141, 5)]  # 字跟着地图缩放，尺寸差一点就认不出，所以挡位分得细
+    return [(x, y + 55) for x, y in find_all_scaled(img, tag, 0.75, scales)]
 
 
 def _lab_from_menu(find_all, tpl):
@@ -96,6 +97,7 @@ def _lab_from_menu(find_all, tpl):
             if r["key"] == "lab":
                 tap(mx + 75, r["y"])
                 time.sleep(2)
+                close_menu(find_all, tpl)  # 菜单会挡住底部"实验室"几个字
                 img = _safe_shot(find_all, tpl)
                 if find_all(img, tpl["label_lab"], 0.8):
                     return img

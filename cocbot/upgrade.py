@@ -135,14 +135,29 @@ def _open_menu(find_all, tpl):
     return icons[0][0] + MENU_DX
 
 
+def walls_first():
+    """按优先级升级、并且城墙排在第一位：城墙不受"金币满了才升""金币留着升大本营"的限制。"""
+    return CFG["upgrade_rule"] == "priority" and priority()[:1] == ["wall"]
+
+
 def _usable(row, skip_gold, allow_walls, banned):
     if row["new"] or row["red"] or row["cur"] not in ("gold", "elixir") or row["key"] in NEVER_UPGRADE:
         return False
     if (row["key"], row["cur"], row["price"]) in banned:
         return False
+    if row["key"] == "wall" and walls_first():
+        return True
     if skip_gold and row["cur"] == "gold":
         return False
     return allow_walls or row["key"] != "wall"
+
+
+def close_menu(find_all, tpl):
+    """点完菜单里的某一行后，再点一下工人图标收起菜单。建筑仍保持选中，菜单不会再挡住底部的建筑名字。"""
+    icons = find_all(_safe_shot(find_all, tpl), tpl["builder_icon"], 0.8)
+    if icons:
+        tap(*icons[0])
+        time.sleep(1)
 
 
 def _pages(find_all, tpl, mx):
@@ -371,6 +386,7 @@ def _focus_townhall_from_menu(find_all, tpl):
             if r["key"] == "townhall":
                 tap(mx + 75, r["y"])
                 time.sleep(2)
+                close_menu(find_all, tpl)
                 return True
     tap(*DESELECT)
     return False

@@ -16,6 +16,7 @@ import cv2
 from .adbtool import ADB, adb, device, screen_size, screenshot, swipe, tap
 from . import config
 from .config import CFG, PID_FILE, running_pid
+from . import attack as attack_mod
 from .attack import attack, fill_army
 from .stats import choose_plan
 from .lab import try_research
@@ -257,15 +258,15 @@ def one_round():
         global _th_pause_until
         offense_first = time.time() < _th_pause_until
         if TOWNHALL_FIRST and offense_first:
-            skip_gold = not gold_full(screenshot())  # 还是攒着金币，满了才花
+            skip_gold = False  # 游戏建议先升进攻，这段时间大本营反正升不了，金币不用攒，拿去升防御
         elif TOWNHALL_FIRST:
             r = try_townhall(find_all, find_all_scaled, TPL, log)
             full = gold_full(screenshot())
             if r == "warned":
                 _th_pause_until = time.time() + TH_PAUSE
                 offense_first = True
-                log("先把训练营、部落城堡、实验室、兵种研究升上去，6 小时后再试升大本营")
-                skip_gold = not full
+                log("先把训练营、部落城堡、实验室、兵种研究升上去，6 小时后再试升大本营（这段时间金币不攒，拿去升防御）")
+                skip_gold = False
             elif r == "locked":
                 log("大本营要先造齐新建筑才能升，先花金币造新建筑")
                 build_gold, skip_gold = True, not full
@@ -305,9 +306,9 @@ def one_round():
         if storage_full(img):
             log("金币和圣水都满了，这轮不进攻")
         else:
-            plan, why = choose_plan()  # 自动配兵：几套方案轮流试，挑抢得最多的
+            plan, why = choose_plan(attack_mod.AVAILABLE)  # 自动配兵：几套方案轮流试，挑抢得最多的
             log(f"这场用\"{plan}\"配兵（{why}）")
-            fill_army(find_all, TPL, log, plan)
+            plan = fill_army(find_all, TPL, log, plan)  # 方案里的兵种没有时会换一套
             attack(find_all, TPL, log, need_gold=not gold_full(img), need_elixir=not elixir_full(img), plan=plan)
 
     wait = random.randint(LOOP_MIN, LOOP_MAX)
