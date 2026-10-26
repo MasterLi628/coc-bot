@@ -50,6 +50,7 @@ TPL = {name: load(name) for name in [
     "shop_arrow", "place_ok", "place_cancel", "event_back", "popup_nogem", "btn_claim",
     "btn_continue", "army_not_full", "redline_msg",
     "web_back", "login_screen", "label_lab", "btn_research", "lab_title", "th_locked", "btn_end_battle", "btn_reload", "btn_panel_collapse", "th_warn",
+    "army_title", "tip_bubble",
 ]}
 
 
@@ -226,7 +227,8 @@ def one_round():
     if not is_home(img):
         _not_home += 1
         log(f"不在村庄主界面（第 {_not_home} 次）")
-        if not recover(img) and _not_home >= MAX_NOT_HOME:
+        # recover 每次都点到了东西但一直回不去（比如在活动页面里来回绕），点再多也没用，到次数照样重启
+        if not recover(img) and _not_home >= MAX_NOT_HOME or _not_home >= MAX_NOT_HOME * 3:
             restart_game()
             _not_home = 0
         time.sleep(5)
@@ -309,7 +311,8 @@ def one_round():
             plan, why = choose_plan(attack_mod.AVAILABLE)  # 自动配兵：几套方案轮流试，挑抢得最多的
             log(f"这场用\"{plan}\"配兵（{why}）")
             plan = fill_army(find_all, TPL, log, plan)  # 方案里的兵种没有时会换一套
-            attack(find_all, TPL, log, need_gold=not gold_full(img), need_elixir=not elixir_full(img), plan=plan)
+            if plan is not None:
+                attack(find_all, TPL, log, need_gold=not gold_full(img), need_elixir=not elixir_full(img), plan=plan)
 
     wait = random.randint(LOOP_MIN, LOOP_MAX)
     log(f"等待 {wait} 秒")
