@@ -131,13 +131,14 @@ def _slot_xs(img):
     def edges(a, b):
         return [x for x in range(max(a, 2), min(b, 1598)) if prof[x] > 0.5 and prof[x] == prof[x - 2:x + 3].max()]
 
-    left = (edges(100, 170) or [SLOT_X0 - 55])[0]
+    strongest = lambda xs: max(xs, key=lambda x: prof[x])  # 背景花草也有竖边，取最强的那条（卡片边框接近 1.0）
+    left = strongest(edges(100, 170) or [SLOT_X0 - 55])
     xs = []
     while left + 110 < 1600 and len(xs) < SLOTS:
         if _slot_blank(img, left + 55):
             break
         xs.append(left + 55)
-        left = (edges(left + 116, left + 143) or [left + SLOT_DX])[0]
+        left = strongest(edges(left + 116, left + 143) or [left + SLOT_DX])
     return xs
 
 

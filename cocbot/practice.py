@@ -20,6 +20,7 @@ PCT_BOX = (645, 705, 1495, 1590)  # 战斗中右下角"摧毁率"数字（y0, y1
 END_PCT_BOX = (125, 170, 740, 870)  # 结算页中间那颗星上的"摧毁率"（绿字）
 MAX_TRIES = 8                # 同一关连续这么多场都没 100%，说明现在打不过，先歇着
 REST = 6 * 3600
+STALL = 60                   # 摧毁率这么多秒没涨就结束战斗
 
 _tries = 0                   # 当前这关已经连续打了几场没 100%
 _rest_until = 0
@@ -107,20 +108,21 @@ def practice(find_all, tpl, log):
     attack._deploy(find_all, tpl, log, style)
 
     # 等结算页；单人模式没有可抢的资源，不能用联机那套"资源抢光就提前结束"
-    pct, end, btn = 0, time.time() + attack.BATTLE_TIMEOUT, None
-    while time.time() < end:
+    # 单人模式没有 3 分钟时限，兵没死光（比如英雄没放出去）就一直不结束：摧毁率 60 秒没动就当打完了
+    pct, end, btn, moved = 0, time.time() + attack.BATTLE_TIMEOUT, None, time.time()
+    while time.time() < end and time.time() - moved < STALL:
         img = screenshot()
         btn = find_all(img, tpl["btn_return"], 0.8) or find_all(img, tpl["btn_claim"], 0.8)
         if btn:
             break
         p = read_number(img[PCT_BOX[0]:PCT_BOX[1], PCT_BOX[2]:PCT_BOX[3]], drop_last=True)
-        if p is not None and pct <= p <= 100:
-            pct = p
+        if p is not None and pct < p <= 100:
+            pct, moved = p, time.time()
         time.sleep(2)
     if not btn:
         img = screenshot()
         save_debug(img, "练兵_超时")
-        log("练兵：战斗超时没结束，点\"结束战斗\"退出（截图存在 debug\\练兵_超时.png）")
+        log("练兵：摧毁率一直不涨（或超时），点\"结束战斗\"退出（截图存在 debug\\练兵_超时.png）")
         btn = _end_battle(find_all, tpl, img)
         if not btn:
             return False  # 退不出来就交给主循环（连续几轮不在村庄会重启游戏）
