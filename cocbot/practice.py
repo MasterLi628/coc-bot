@@ -115,6 +115,7 @@ def practice(find_all, tpl, log):
         btn = find_all(img, tpl["btn_return"], 0.8) or find_all(img, tpl["btn_claim"], 0.8)
         if btn:
             break
+        attack._cancel_end(img, tpl)  # 误点出的"结束战斗？"框，点取消
         p = read_number(img[PCT_BOX[0]:PCT_BOX[1], PCT_BOX[2]:PCT_BOX[3]], drop_last=True)
         if p is not None and pct < p <= 100:
             pct, moved = p, time.time()

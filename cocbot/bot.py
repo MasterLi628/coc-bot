@@ -51,7 +51,7 @@ TPL = {name: load(name) for name in [
     "shop_arrow", "place_ok", "place_cancel", "event_back", "popup_nogem", "btn_claim",
     "btn_continue", "army_not_full", "redline_msg",
     "web_back", "login_screen", "label_lab", "btn_research", "lab_title", "th_locked", "btn_end_battle", "btn_reload", "btn_panel_collapse", "th_warn",
-    "army_title", "tip_bubble", "sp_attack", "sp_win", "sp_tab",
+    "army_title", "tip_bubble", "sp_attack", "sp_win", "sp_tab", "end_confirm",
     "potion_btn", "potion_title", "potion_ok", "unit_hour", "unit_min",
 ]}
 

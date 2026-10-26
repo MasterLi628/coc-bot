@@ -45,6 +45,29 @@ def _blocked(x, y):
     return any(x1 <= x <= x2 and y1 <= y <= y2 for x1, y1, x2, y2 in NO_TAP)
 
 
+def _swipe_ok(x1, y1, x2, y2):
+    """拖动下兵的两头和中点都不能碰到按钮、也不能出了地图（以前拖到"结束战斗"上，弹出确认框卡住整场）。"""
+    pts = [(x1, y1), (x2, y2), ((x1 + x2) // 2, (y1 + y2) // 2)]
+    return all(20 <= x <= 1580 and SCREEN_Y[0] <= y <= SCREEN_Y[1] and not _blocked(x, y) for x, y in pts)
+
+
+END_CANCEL = (623, 580)  # "结束战斗？"确认框的"取消"
+
+
+def _cancel_end(img, tpl):
+    """下兵时误点出了"结束战斗？"确认框，点"取消"接着打。"""
+    if find_end_confirm(img, tpl):
+        tap(*END_CANCEL)
+        time.sleep(0.8)
+        return True
+    return False
+
+
+def find_end_confirm(img, tpl):
+    r = cv2.matchTemplate(img[200:360, 600:1000], tpl["end_confirm"], cv2.TM_CCOEFF_NORMED)
+    return cv2.minMaxLoc(r)[1] >= 0.8
+
+
 def _wait_for(find_all, tpl, timeout, interval=1.5):
     """等任意一个模板出现。tpl 可以是单个模板或模板列表。"""
     tpls = tpl if isinstance(tpl, list) else [tpl]
@@ -293,9 +316,15 @@ def _drop_all(find_all, tpl, slot, points, spread, per_tap=0.1, max_taps=150, ch
     time.sleep(0.3)
     for i in range(max_taps // check if hold else max_taps):
         x, y = points[i % len(points)]
+        if hold and not _swipe_ok(x - spread, y - spread // 3, x + spread, y + spread // 3):
+            spread = spread // 2  # 拖动的两头碰到"结束战斗"等按钮了，拖短一点；太短就改成点
+            if spread < 8:
+                hold = False
+                spread = 8
         if hold:
             swipe(x - spread, y - spread // 3, x + spread, y + spread // 3, 1500)
             img = screenshot()
+            _cancel_end(img, tpl)
             if _take_reward(img, log):
                 return True
             if _card_empty(img, slot) or not _in_battle(find_all, tpl, img):
@@ -307,6 +336,7 @@ def _drop_all(find_all, tpl, slot, points, spread, per_tap=0.1, max_taps=150, ch
             time.sleep(per_tap)
         if i % check == check - 1:
             img = screenshot()
+            _cancel_end(img, tpl)
             if _take_reward(img, log):
                 return True
             if _card_empty(img, slot) or not _in_battle(find_all, tpl, img):
