@@ -368,7 +368,19 @@ def _edges(find_all, tpl, slot, angles):
     return points
 
 
-def _deploy(find_all, tpl, log):
+# 下兵打法（单人模式练兵时轮流试，见 practice.py）：
+# funnel 开口；routes 主攻点分几路（1＝全压一点，2＝两个方向各一半）；
+# follow 肉盾放下后再等几秒才放输出兵（让肉盾先吃防御火力）
+STYLES = {
+    "标准": {"funnel": True, "routes": 1, "follow": 0},
+    "不开口": {"funnel": False, "routes": 1, "follow": 0},
+    "两路": {"funnel": True, "routes": 2, "follow": 0},
+    "肉盾先走": {"funnel": True, "routes": 1, "follow": 5},
+}
+STYLE = "标准"  # 联机进攻用的打法
+
+
+def _deploy(find_all, tpl, log, style=None):
     """按兵种分工下兵，返回主攻点（下兵失败返回 None）：
     1. 开口：有野蛮人和肉盾时，主攻方向两侧各放几个野蛮人清外围
     2. 用还有兵的小兵试出能放兵的边缘（用光了换下一张卡）
@@ -388,9 +400,10 @@ def _deploy(find_all, tpl, log):
     usable = [k for k, s in slots.items() if not _card_empty(img, s)]
     if not usable:
         return
+    st = STYLES[style or STYLE]
 
     # 开口：主攻方向左右两侧各放几个野蛮人，先清掉外围建筑，肉盾才会往中心走，不会绕着外圈打
-    if "barb" in usable and any(k in usable for k in TANKS):
+    if st["funnel"] and "barb" in usable and any(k in usable for k in TANKS):
         tap(_sx(slots["barb"]), SLOT_Y)
         time.sleep(0.4)
         sides = [p for p in (_find_edge(find_all, tpl, slots["barb"], angles[0] + d) for d in (-40, 40)) if p]
@@ -419,15 +432,16 @@ def _deploy(find_all, tpl, log):
     if not points:
         log("没找到能放兵的位置")
         return
-    main = [points[0]]
+    main = points[:st["routes"]]
+    follow = st["follow"]
     plan = [  # (兵种, 放在哪, 撒开半径, 放之前等几秒)
         ("witchgolem", main, 10, 0),  # 女巫戈仑：血厚，还会召唤骷髅
         ("skelgiant", main, 15, 0),   # 骷髅巨人：专打防御，死了还会爆炸
         ("giant", main, 15, 0),
         ("breaker", main, 10, 3),
         ("lavaloon", main, 15, 1),    # 熔岩气球：先去打防空
-        ("totem", main, 20, 2),       # 图腾投手：射程远，躲在肉盾后面输出
-        ("archer", main, 50, 1),
+        ("totem", main, 20, 2 + follow),  # 图腾投手：射程远，躲在肉盾后面输出
+        ("archer", main, 50, 1 + follow),
         ("barb", main, 50, 0),
         ("goblin", points, 40, 4),
         ("ghost", points, 30, 0),     # 皇家幽灵：分到各个资源方向
@@ -690,7 +704,7 @@ def _read_capacity(img):
     """读军队界面"75/90"斜杠后面的总人口，读不出返回 None。
     斜杠和数字一样是白字，靠"笔画占外框的比例"认出来：斜杠是细斜线，占比不到 0.42。"""
     from .scout import SIZE, _DIGITS
-    hsv = cv2.cvtColor(img[192:228, 720:810], cv2.COLOR_BGR2HSV)
+    hsv = cv2.cvtColor(img[192:228, 720:860], cv2.COLOR_BGR2HSV)  # 3 位数人口（145/145）要宽一点
     m = ((hsv[..., 1] < 70) & (hsv[..., 2] > 200)).astype("uint8")
     n, _, st, _ = cv2.connectedComponentsWithStats(m)
     comps = sorted((st[k, 0], st[k, 1], st[k, 2], st[k, 3], st[k, 4]) for k in range(1, n)

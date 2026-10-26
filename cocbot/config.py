@@ -27,7 +27,8 @@ DEFAULTS = {
     "upgrade_rule": "cheap",   # 升级规则：cheap＝均衡（先升最便宜的，也就是等级最低的）；priority＝按优先级列表
     "priority": [],            # 升级优先级（建筑代号，见 BUILDINGS）；空着用 DEFAULT_PRIORITY
     "walls_only_when_full": True,  # 城墙只在金币存满时才升
-    "research": True,          # 实验室自动研究（先研究最便宜的，也就是等级最低的兵种）
+    "research": True,
+    "practice": True,          # 仓库满了时去单人模式练兵（打下一关，比较几种下兵打法）          # 实验室自动研究（先研究最便宜的，也就是等级最低的兵种）
     "close_action": "ask",     # 点控制面板的 ✕：ask＝每次问；tray＝退到后台；quit＝停止挂机并关闭
     "appearance": "system",    # 控制面板配色：system＝跟随系统；light＝浅色；dark＝深色
 }

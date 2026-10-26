@@ -14,14 +14,28 @@ SIZE = (14, 20)
 _DIGITS = {d: imread(DIGITS_DIR / f"{d}.png", cv2.IMREAD_GRAYSCALE).astype(float) for d in range(10)}
 
 
-def read_number(roi):
+def read_number(roi, drop_last=False):
     """读一块区域里的白色数字（游戏里描黑边的那种字体），读不出来返回 None。
-    每个数字按连通块切开、缩放到同一大小再比对，所以字大一点小一点都能读。"""
+    每个数字按连通块切开、缩放到同一大小再比对，所以字大一点小一点都能读。
+    drop_last：最右边那块不是数字（比如摧毁率后面的 %），去掉。"""
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    m = ((hsv[..., 1] < 70) & (hsv[..., 2] > 200)).astype("uint8")
+    return read_mask(((hsv[..., 1] < 70) & (hsv[..., 2] > 200)).astype("uint8"), drop_last)
+
+
+def read_green(roi, drop_last=False):
+    """读绿色数字（结算页星星上的"摧毁率 100%"）。"""
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    m = (hsv[..., 0] >= 40) & (hsv[..., 0] <= 60) & (hsv[..., 1] > 100) & (hsv[..., 2] > 180)
+    return read_mask(m.astype("uint8"), drop_last)
+
+
+def read_mask(m, drop_last=False):
+    """按连通块切开二值图 m 里的数字逐个比对。"""
     n, _, st, _ = cv2.connectedComponentsWithStats(m)
     comps = sorted((st[i, 0], st[i, 1], st[i, 2], st[i, 3]) for i in range(1, n)
                    if 13 <= st[i, 3] <= 30 and st[i, 4] >= 25)
+    if drop_last:
+        comps = comps[:-1]
     if not comps:
         return None
     text = ""

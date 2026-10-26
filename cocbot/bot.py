@@ -17,9 +17,10 @@ from .adbtool import ADB, adb, device, screen_size, screenshot, swipe, tap
 from . import config
 from .config import CFG, PID_FILE, running_pid
 from . import attack as attack_mod
+from . import practice as practice_mod
 from .attack import attack, fill_army
 from .stats import choose_plan
-from .lab import try_research
+from .lab import try_potion, try_research
 from .pinch import pinch_out
 from .upgrade import DESELECT, cancel_placement, close_windows, danger_on_screen, try_build_new, try_townhall, try_upgrade
 
@@ -50,7 +51,8 @@ TPL = {name: load(name) for name in [
     "shop_arrow", "place_ok", "place_cancel", "event_back", "popup_nogem", "btn_claim",
     "btn_continue", "army_not_full", "redline_msg",
     "web_back", "login_screen", "label_lab", "btn_research", "lab_title", "th_locked", "btn_end_battle", "btn_reload", "btn_panel_collapse", "th_warn",
-    "army_title", "tip_bubble",
+    "army_title", "tip_bubble", "sp_attack", "sp_win",
+    "potion_btn", "potion_title", "potion_ok", "unit_hour", "unit_min",
 ]}
 
 
@@ -204,6 +206,8 @@ class LoggedOut(Exception):
 
 _not_home = 0
 _last_lab = 0
+_last_potion = 0
+POTION_INTERVAL = 2 * 3600  # 隔多久看一次要不要用研究药水
 _th_pause_until = 0         # 游戏建议先升进攻时，这个时间之前不去升大本营
 TH_PAUSE = 6 * 3600
 
@@ -303,10 +307,20 @@ def one_round():
         r = try_research(find_all, find_all_scaled, TPL, log)
         _last_lab = 0 if r == "done" else time.time()  # 研究完了马上接着研究；没东西可研究就过一阵再看
         time.sleep(random.uniform(1, 2))
+    global _last_potion
+    if RESEARCH and lab_busy(screenshot()) and time.time() - _last_potion > POTION_INTERVAL:
+        try_potion(find_all, find_all_scaled, TPL, log)  # 研究时间够长才用，见 lab.POTION_HOURS
+        _last_potion = time.time()
     if ATTACK:
         img = screenshot()
         if storage_full(img):
-            log("金币和圣水都满了，这轮不进攻")
+            if CFG["practice"] and not practice_mod.resting():
+                # 仓库满了联机白打，去单人模式练下兵打法（军队免费，打完自动补满）
+                plan, _ = choose_plan(attack_mod.AVAILABLE)
+                if fill_army(find_all, TPL, log, plan) is not None:
+                    practice_mod.practice(find_all, TPL, log)
+            else:
+                log("金币和圣水都满了，这轮不进攻")
         else:
             plan, why = choose_plan(attack_mod.AVAILABLE)  # 自动配兵：几套方案轮流试，挑抢得最多的
             log(f"这场用\"{plan}\"配兵（{why}）")
