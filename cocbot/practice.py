@@ -61,6 +61,18 @@ def _pick_style():
     return names[(names.index(best) + _tries) % len(names)]
 
 
+def _end_battle(find_all, tpl, img):
+    """点"结束战斗"并确认，等结算页，返回"回营"按钮；退不出来返回 None。"""
+    end = find_all(img, tpl["btn_end_battle"], 0.8)
+    if end:
+        tap(*end[0])
+        time.sleep(1.5)
+        ok = attack._green_button(screenshot())
+        if ok:
+            tap(*ok)
+    return attack._wait_for(find_all, tpl["btn_return"], 15)
+
+
 def resting():
     return time.time() < _rest_until
 
@@ -91,6 +103,7 @@ def practice(find_all, tpl, log):
         save_debug(screenshot(), "练兵_进战斗")
         return False
     time.sleep(1.5)
+    save_debug(screenshot(), "练兵_开战")  # 每场覆盖一张，兵种栏没认全时拿来查
     attack._deploy(find_all, tpl, log, style)
 
     # 等结算页；单人模式没有可抢的资源，不能用联机那套"资源抢光就提前结束"
@@ -105,8 +118,17 @@ def practice(find_all, tpl, log):
             pct = p
         time.sleep(2)
     if not btn:
-        log("练兵：战斗超时没结束")
-        return False
+        img = screenshot()
+        save_debug(img, "练兵_超时")
+        log("练兵：战斗超时没结束，点\"结束战斗\"退出（截图存在 debug\\练兵_超时.png）")
+        btn = _end_battle(find_all, tpl, img)
+        if not btn:
+            return False  # 退不出来就交给主循环（连续几轮不在村庄会重启游戏）
+        _record(style, pct, False)
+        _tries += 1
+        tap(*btn)
+        time.sleep(4)
+        return True
     time.sleep(1.5)
     img = screenshot()
     win = bool(find_all(img, tpl["sp_win"], 0.8))
