@@ -13,8 +13,8 @@ import cv2
 import numpy as np
 
 from .adbtool import screenshot, swipe, tap
-from .config import BUILDINGS, CFG, NEVER_UPGRADE, TEMPLATES, imread, priority, save_debug
-from .menu import MENU_DX, read_rows
+from .config import BUILDINGS, CFG, NEVER_UPGRADE, RESOURCE, TEMPLATES, imread, priority, save_debug
+from .menu import menu_left, read_rows
 
 DESELECT = (1590, 340)  # 地图右侧空地/树林，点了没副作用（5 本后右边 y≈395~500 多了村民委托浮窗，别点到）
 X_SCALES = (0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5)
@@ -132,7 +132,7 @@ def _open_menu(find_all, tpl):
     if not find_all(_safe_shot(find_all, tpl), tpl["menu_suggest"], 0.8):
         tap(*DESELECT)
         return None
-    return icons[0][0] + MENU_DX
+    return menu_left(_safe_shot(find_all, tpl), icons[0][0])
 
 
 def walls_first():
@@ -544,25 +544,37 @@ def _new_usable(row, skip_gold):
 
 
 def _try_build_new(find_all, tpl, log, skip_gold, pick=0):
-    # 菜单从头翻到尾，找第 pick 个能造的新建筑（新建筑常在菜单最下面）
+    # 菜单从头翻到尾，记下所有能造的新建筑，防御类先造、资源建筑最后，同类按升级优先级；挑第 pick 个
     mx = _open_menu(find_all, tpl)
     if mx is None:
         return False
-    seen, target = [], None
+    seen = []
     for _, rows in _pages(find_all, tpl, mx):
         for r in rows:
             ident = (r["key"], r["cur"], r["price"])
-            if not _new_usable(r, skip_gold) or ident in seen:
-                continue
-            if len(seen) == pick:
-                target = r
-                break
-            seen.append(ident)
+            if _new_usable(r, skip_gold) and ident not in seen:
+                seen.append(ident)
+    order = priority()
+    rank = lambda k: order.index(k) if k in order else order.index("other")
+    seen.sort(key=lambda i: (i[0] in RESOURCE, rank(i[0])))
+    if pick >= len(seen):
+        tap(*DESELECT)
+        return False
+    # 菜单已经翻到底了，关掉重开，从头翻到选中的那一行
+    tap(*DESELECT)
+    time.sleep(1)
+    mx = _open_menu(find_all, tpl)
+    if mx is None:
+        return False
+    target = None
+    for _, rows in _pages(find_all, tpl, mx):
+        target = next((r for r in rows if _new_usable(r, skip_gold) and (r["key"], r["cur"], r["price"]) == seen[pick]), None)
         if target:
             break
     if not target:
         tap(*DESELECT)
         return False
+    log(f"造新建筑：{BUILDINGS.get(target['key'], '建筑')}")
     tap(mx + 75, target["y"])
     time.sleep(2)
 

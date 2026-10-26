@@ -38,13 +38,16 @@ BUILDINGS = {
     "goldsto": "储金罐", "esto": "圣水瓶",
     "barracks": "兵营", "camp": "训练营", "lab": "实验室", "spell": "法术工厂",
     "mortar": "迫击炮", "wizard": "法师塔", "airdef": "防空火箭", "archer": "箭塔", "cannon": "加农炮",
-    "bomb": "隐形炸弹", "spring": "隐形弹簧",
-    "mine": "金矿", "ecol": "圣水收集器",
+    "tesla": "特斯拉电磁塔", "airsweeper": "空气炮",
+    "bomb": "隐形炸弹", "spring": "隐形弹簧", "giantbomb": "巨型炸弹", "airbomb": "空中炸弹", "airmine": "搜空地雷",
+    "mine": "金矿", "ecol": "圣水收集器", "darkdrill": "暗黑重油钻井", "darksto": "暗黑重油罐",
     "cc": "部落城堡", "herohall": "英雄殿堂",
     "other": "其他（认不出名字的建筑）",
     "wall": "城墙",
 }
 DEFAULT_PRIORITY = list(BUILDINGS)
+# 造新建筑时最后才造的资源建筑（用户要求：升本后先把防御建筑造齐，再造资源建筑）
+RESOURCE = {"goldsto", "esto", "mine", "ecol", "darkdrill", "darksto"}
 NEVER_UPGRADE = {"boat", "hut", "townhall"}  # 帆船（会去建筑大师基地）、建筑工人小屋（要宝石）；大本营单独处理（"大本营优先"）
 
 
