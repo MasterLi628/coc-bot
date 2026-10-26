@@ -51,7 +51,7 @@ TPL = {name: load(name) for name in [
     "shop_arrow", "place_ok", "place_cancel", "event_back", "popup_nogem", "btn_claim",
     "btn_continue", "army_not_full", "redline_msg",
     "web_back", "login_screen", "label_lab", "btn_research", "lab_title", "th_locked", "btn_end_battle", "btn_reload", "btn_panel_collapse", "th_warn",
-    "army_title", "tip_bubble", "sp_attack", "sp_win",
+    "army_title", "tip_bubble", "sp_attack", "sp_win", "sp_tab",
     "potion_btn", "potion_title", "potion_ok", "unit_hour", "unit_min",
 ]}
 
@@ -177,6 +177,10 @@ def recover(img):
         if pts:
             tap(*pts[0])
             return True
+    # 停在进攻页面（联机/单人模式那个面板，比如单人模式打输后会回到关卡地图）：点右边村庄空地收起
+    if find_all(img, TPL["btn_search"], 0.8) or find_all(img, TPL["sp_attack"], 0.8) or find_all(img, TPL["sp_tab"], 0.8):
+        tap(1300, 600)
+        return True
     return close_windows(find_all, find_all_scaled, TPL, log)
 
 

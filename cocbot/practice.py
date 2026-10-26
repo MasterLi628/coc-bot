@@ -128,6 +128,7 @@ def practice(find_all, tpl, log):
         _tries += 1
         tap(*btn)
         time.sleep(4)
+        _back_home(find_all, tpl)
         return True
     time.sleep(1.5)
     img = screenshot()
@@ -151,4 +152,18 @@ def practice(find_all, tpl, log):
     time.sleep(4)
     if find_all(screenshot(), tpl["btn_continue"], 0.8):  # 过关可能有宝箱/奖励动画
         attack._open_chest(find_all, tpl, log)
+    _back_home(find_all, tpl)
     return True
+
+
+def _back_home(find_all, tpl):
+    """打完回村庄。单人模式打输了点"回营"会回到关卡地图（进攻页面），要再点一下右边空地收起来。"""
+    for _ in range(4):
+        img = screenshot()
+        if find_all(img, tpl["home_attack"], 0.8):
+            return
+        if find_all(img, tpl["sp_attack"], 0.8) or find_all(img, tpl["sp_tab"], 0.8) or find_all(img, tpl["btn_search"], 0.8):
+            tap(1300, 600)
+        else:
+            save_debug(img, "练兵_回村")
+        time.sleep(2)
