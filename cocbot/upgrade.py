@@ -179,6 +179,7 @@ def _pages(find_all, tpl, mx):
 def _sort_key(rule, rank, offense_first=False):
     """按升级规则给菜单行排序，小的先升。
     cheap：先升最便宜的——同一种建筑等级越低越便宜，这样低级的建筑会先被补上来；城墙永远排最后；
+    实验室例外排最前（它最贵，按价格会一直轮不到，兵种研究就停了）；
     priority：按优先级列表，同一档里便宜的先升。
     offense_first：游戏建议先升进攻时，OFFENSE 里的建筑排在所有建筑前面。"""
     def key(r):
@@ -186,7 +187,7 @@ def _sort_key(rule, rank, offense_first=False):
         first = offense_first and r["key"] in OFFENSE
         if rule == "priority":
             return (not first, rank(r["key"]), price)
-        return (not first, r["key"] == "wall", price, rank(r["key"]))
+        return (not first, r["key"] != "lab", r["key"] == "wall", price, rank(r["key"]))
     return key
 
 
