@@ -74,6 +74,15 @@ def _end_battle(find_all, tpl, img):
     return attack._wait_for(find_all, tpl["btn_return"], 15)
 
 
+def _lost(log):
+    """这关又没打满；连续 MAX_TRIES 场都没打满就歇一阵。"""
+    global _tries, _rest_until
+    _tries += 1
+    if _tries >= MAX_TRIES:
+        log(f"练兵：这关连续 {MAX_TRIES} 场没打满，先歇 6 小时（等兵种和建筑升级）")
+        _tries, _rest_until = 0, time.time() + REST
+
+
 def resting():
     return time.time() < _rest_until
 
@@ -128,7 +137,7 @@ def practice(find_all, tpl, log):
         if not btn:
             return False  # 退不出来就交给主循环（连续几轮不在村庄会重启游戏）
         _record(style, pct, False)
-        _tries += 1
+        _lost(log)
         tap(*btn)
         time.sleep(4)
         _back_home(find_all, tpl)
@@ -147,10 +156,7 @@ def practice(find_all, tpl, log):
         _tries = 0
         log("练兵：这关打满了，下次打下一关")
     else:
-        _tries += 1
-        if _tries >= MAX_TRIES:
-            log(f"练兵：这关连续 {MAX_TRIES} 场没打满，先歇 6 小时（等兵种和建筑升级）")
-            _tries, _rest_until = 0, time.time() + REST
+        _lost(log)
     tap(*btn[0])
     time.sleep(4)
     if find_all(screenshot(), tpl["btn_continue"], 0.8):  # 过关可能有宝箱/奖励动画
