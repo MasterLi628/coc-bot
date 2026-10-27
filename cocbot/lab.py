@@ -101,7 +101,8 @@ def _lab_by_tag(img, find_all_scaled):
     tag = imread(TEMPLATES / "lab_idle_tag.png")
     scales = [s / 100 for s in range(60, 141, 5)]  # 字跟着地图缩放，尺寸差一点就认不出，所以挡位分得细
     # 只在地图上找：选中实验室时底部按钮上也有"研究"两个字
-    return [(x, y + 55) for x, y in find_all_scaled(img[:780], tag, 0.75, scales) if y < 720]
+    # 字很小，背后的地面颜色一变（换阵型后挨着红色范围圈）分数就掉到 0.65~0.72；"训练"等别处都不到 0.55
+    return [(x, y + 55) for x, y in find_all_scaled(img[:780], tag, 0.6, scales) if y < 720]
 
 
 def _lab_from_menu(find_all, tpl):
@@ -246,10 +247,12 @@ def _white_mask(img):
     return ((hsv[..., 1] < 70) & (hsv[..., 2] > 200)).astype("float32")
 
 
-def _unit_hours(unit, tpl):
-    """时间单位那一块（白字二值图）代表多少小时：小时 1、分钟 1/60；都不像时，窄的（单字）当"天"，宽的当"秒"。"""
+def _unit_hours(unit, tpl, small=False):
+    """时间单位那一块（白字二值图）代表多少小时：小时 1、分钟 1/60；都不像时，窄的（单字）当"天"，宽的当"秒"。
+    small：按钮上的小号字（数字高 17 左右），用另一套单位模板。"""
     best, hours = 0.5, None
-    for name, h in (("unit_hour", 1), ("unit_min", 1 / 60)):
+    sfx = "_s" if small else ""
+    for name, h in (("unit_hour" + sfx, 1), ("unit_min" + sfx, 1 / 60)):
         t = _white_mask(tpl[name])
         th, tw = t.shape
         u = cv2.copyMakeBorder(unit, th // 2, th // 2, tw // 2, tw // 2, cv2.BORDER_CONSTANT, value=0)  # 四周留白，模板能错开对齐
@@ -257,18 +260,23 @@ def _unit_hours(unit, tpl):
         if v > best:
             best, hours = v, h
     if hours is None:
-        hours = 24 if unit.shape[1] < 45 else 1 / 3600
+        hours = 24 if unit.shape[1] < (30 if small else 45) else 1 / 3600
     return hours
 
 
-def _read_hours(img, tpl):
-    """读"4小时 22分钟"这种时间，返回小时数；读不出返回 None。大的连通块是数字，数字之间的碎块是单位。"""
+def _read_hours(img, tpl, box=BUSY_TIME_BOX, small=False):
+    """读"4小时 22分钟"这种时间，返回小时数；读不出返回 None。大的连通块是数字，数字之间的碎块是单位。
+    small：按钮上的小号字（数字高 17 左右）。"""
     import numpy as np
     from .scout import SIZE, _DIGITS
-    y0, y1, x0, x1 = BUSY_TIME_BOX
+    y0, y1, x0, x1 = box
     m = _white_mask(img[y0:y1, x0:x1]).astype("uint8")
     n, _, st, _ = cv2.connectedComponentsWithStats(m)
-    big = [i for i in range(1, n) if st[i, 3] >= 24 and st[i, 4] >= 250]
+    if small:  # 小字的"1"和单位碎块一样细，靠顶部对齐分：数字顶到最上面，单位的笔画都低两三像素
+        tops = [st[i, 1] for i in range(1, n) if st[i, 4] >= 100]
+        big = [i for i in range(1, n) if tops and st[i, 3] >= 14 and st[i, 4] >= 60 and st[i, 1] <= min(tops) + 1]
+    else:
+        big = [i for i in range(1, n) if st[i, 3] >= 24 and st[i, 4] >= 250]
     digit = {}
     for i in big:
         x, y, w, h = st[i, :4]
@@ -290,7 +298,7 @@ def _read_hours(img, tpl):
         cols = [x for x in range(g[-1][1], end) if m[:, x].any()]
         if num is None or not cols:
             return None
-        total += num * _unit_hours(m[:, cols[0]:cols[-1] + 1].astype("float32"), tpl)
+        total += num * _unit_hours(m[:, cols[0]:cols[-1] + 1].astype("float32"), tpl, small)
     return total
 
 

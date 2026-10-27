@@ -312,9 +312,49 @@ def _press_upgrade(find_all, tpl, log, name):
         log(f"确认后窗口还在，当作失败处理（截图存在 debug\\{name}_确认后窗口还在.png）")
         save_debug(img, f"{name}_确认后窗口还在")
         raise Danger
-    tap(*DESELECT)
     log(f"已开始升级{name}")
+    _try_builder_potion(find_all, tpl, log, name)
+    tap(*DESELECT)
     return True
+
+
+BPOTION_HOURS = 10  # 刚开始的升级至少要这么久才用工人药水（1 小时 10 倍速＝省 9 小时，短了就浪费）
+
+
+def _try_builder_potion(find_all, tpl, log, name):
+    """刚开始的升级还选中着：工人全忙、这项升级够长、手上有工人药水，就喝一瓶（1 小时内所有工人 10 倍速）。
+    剩余时间读左边那个"立即完成"按钮上的小字；只点带药水图标的"加速建筑工人"和确认框里带药水图标的按钮，
+    宝石、点券的"立即完成"一概不碰。"""
+    from .bot import no_free_builder
+    from .lab import _read_hours
+    time.sleep(1)
+    img = screenshot()
+    btn = find_all(img, tpl["bpotion_btn"], 0.8)
+    if not btn or not no_free_builder(img):
+        return  # 没有工人药水，或者还有空闲工人（等都忙起来再喝，一瓶管所有工人）
+    bx, by = btn[0]  # 剩余时间在它左边那个按钮顶上（那个按钮的图标会轮换，不能拿来定位）
+    hours = _read_hours(img, tpl, (by - 55, by - 17, bx - 237, bx - 82), small=True)
+    if hours is None:
+        log(f"读不出{name}的升级时间，先不用工人药水（截图存在 debug\工人药水.png）")
+        save_debug(img, "工人药水")
+        return
+    if hours < BPOTION_HOURS:
+        return
+    tap(*btn[0])
+    time.sleep(1.5)
+    img = screenshot()
+    ok = find_all(img, tpl["bpotion_ok"], 0.8)
+    if not (ok and find_all(img, tpl["bpotion_title"], 0.8)):
+        log("没出现\"加速建筑工人\"确认框，不用药水（截图存在 debug\工人药水.png）")
+        save_debug(img, "工人药水")
+        x = find_all(img, tpl["close_x"], 0.8)
+        if x:
+            tap(*x[0])
+            time.sleep(1)
+        return
+    tap(*ok[0])
+    time.sleep(1.5)
+    log(f"{name}要升约 {hours:.0f} 小时，工人都在忙，用了一瓶工人药水（1 小时内所有工人 10 倍速）")
 
 
 def _price_is_red(img, bx, by, s=1.0):
