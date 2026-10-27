@@ -228,6 +228,7 @@ ARMY_CARDS = {
     "barb": ("野蛮人", 1), "archer": ("弓箭手", 1), "giant": ("巨人", 5), "goblin": ("哥布林", 1),
     "breaker": ("炸弹人", 2), "totem": ("图腾投手", 28), "witchgolem": ("女巫戈仑", 41),
     "ghost": ("皇家幽灵", 8), "lavaloon": ("熔岩气球", 21), "skelgiant": ("骷髅巨人", 20),
+    "minion": ("亡灵", 2),  # 暗黑兵种，在兵种编辑第二屏
 }
 # templates/army：兵种编辑里的卡片头像
 _ARMY = {p.stem: cv2.cvtColor(imread(p), cv2.COLOR_BGR2GRAY) for p in sorted((TEMPLATES / "army").glob("*.png"))}
@@ -447,7 +448,7 @@ def _deploy(find_all, tpl, log, style=None):
     # 开口可能已经把野蛮人用光了，所以重新看一眼哪些卡还有兵
     points = []
     for first in ("barb", "archer", "goblin", "ghost", "giant", "breaker", "skelgiant", "totem",
-                  "lavaloon", "witchgolem", "king"):
+                  "minion", "lavaloon", "witchgolem", "king"):
         if first not in usable or _card_empty(screenshot(), slots[first]):
             continue
         tap(_sx(slots[first]), SLOT_Y)
@@ -473,6 +474,7 @@ def _deploy(find_all, tpl, log, style=None):
         ("lavaloon", main, 15, 1),    # 熔岩气球：先去打防空
         ("totem", main, 20, 2 + follow),  # 图腾投手：射程远，躲在肉盾后面输出
         ("archer", main, 50, 1 + follow),
+        ("minion", main, 30, 1 + follow),  # 亡灵：会飞，越过城墙跟在肉盾后面输出
         ("barb", main, 50, 0),
         ("goblin", points, 40, 4),
         ("ghost", points, 30, 0),     # 皇家幽灵：分到各个资源方向
@@ -726,6 +728,8 @@ def _unknown_cards(img, cards):
             if _card_unlocked(img, x, y) and all(abs(x - cx) > 50 or abs(y - cy) > 50 for cx, cy in cards.values())]
 
 
+EDIT_NEXT = (1400, 700, 300, 700, 1000)  # 兵种编辑翻到第二屏（要按在卡片上慢慢拖，拖底边不动；拖不会加兵）
+EDIT_PREV = (300, 700, 1400, 700, 1000)
 TRASH = (1545, 210)           # 清空军队的垃圾桶
 TRASH_OK = (970, 580)         # "移除部队？"的确定
 _army_plan = None             # 现在军队是按哪套方案配的（None＝这次启动还没配过）
@@ -871,8 +875,17 @@ def _fill_troops(find_all, tpl, log, plan, img):
         time.sleep(1.5)
         img = screenshot()
         cards = _find_cards(img)
-    AVAILABLE = {k for k, p in cards.items() if _card_unlocked(img, *p)}
     unknown = _unknown_cards(img, cards)
+    # 一屏只看得到前 10 列，亡灵这些暗黑兵种在后面，翻到第二屏（翻一次就到头）再认一遍
+    swipe(*EDIT_NEXT)
+    time.sleep(1.2)
+    img2 = screenshot()
+    more = {k: p for k, p in _find_cards(img2).items() if k not in cards}
+    swipe(*EDIT_PREV)
+    time.sleep(1.2)
+    AVAILABLE = ({k for k, p in cards.items() if _card_unlocked(img, *p)}
+                 | {k for k, p in more.items() if _card_unlocked(img2, *p)})
+    page = 0
     if len(unknown) > _unknown_seen:
         log(f"发现新兵种：兵种编辑里有 {len(unknown)} 张卡片认不出来（新出的兵种或者换了样子），暂时不用它们。"
             "截图存在 debug\新兵种.png，请找 Claude 补上")
@@ -889,16 +902,24 @@ def _fill_troops(find_all, tpl, log, plan, img):
     used, parts = 0, []
     for kind, share in PLANS[plan]:  # 按方案顺序加，战斗时兵种栏也是这个顺序
         name, size = ARMY_CARDS[kind]
-        card = cards.get(kind)
-        if not card or not _card_unlocked(img, *card):
+        if kind not in AVAILABLE:
             continue
+        want = 1 if kind in more else 0
+        card = (more if want else cards)[kind]
         n = min(round(cap * share / size), (cap - used) // size)  # 大块头四舍五入，但不能超出剩下的人口
+        if n and want != page:
+            swipe(*(EDIT_NEXT if want else EDIT_PREV))
+            time.sleep(1.2)
+            page = want
         for _ in range(n):
             tap(*card)
             time.sleep(0.12)
         if n:
             used += n * size
             parts.append(f"{name}{n}")
+    if page:
+        swipe(*EDIT_PREV)
+        time.sleep(1.2)
     barb = cards.get("barb")
     if not barb:
         log("兵种编辑里没认出野蛮人，剩下的人口没补（截图存在 debug\兵种编辑.png）")
