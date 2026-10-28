@@ -229,6 +229,7 @@ ARMY_CARDS = {
     "breaker": ("炸弹人", 2), "totem": ("图腾投手", 28), "witchgolem": ("女巫戈仑", 41),
     "ghost": ("皇家幽灵", 8), "lavaloon": ("熔岩气球", 21), "skelgiant": ("骷髅巨人", 20),
     "minion": ("亡灵", 2),  # 暗黑兵种，在兵种编辑第二屏
+    "balloon": ("气球兵", 5),
 }
 # templates/army：兵种编辑里的卡片头像
 _ARMY = {p.stem: cv2.cvtColor(imread(p), cv2.COLOR_BGR2GRAY) for p in sorted((TEMPLATES / "army").glob("*.png"))}
@@ -449,7 +450,7 @@ def _deploy(find_all, tpl, log, style=None):
     # 开口可能已经把野蛮人用光了，所以重新看一眼哪些卡还有兵
     points = []
     for first in ("barb", "archer", "goblin", "ghost", "giant", "breaker", "skelgiant", "totem",
-                  "minion", "lavaloon", "witchgolem", "king"):
+                  "minion", "balloon", "lavaloon", "witchgolem", "king"):
         if first not in usable or _card_empty(screenshot(), slots[first]):
             continue
         tap(_sx(slots[first]), SLOT_Y)
@@ -473,6 +474,7 @@ def _deploy(find_all, tpl, log, style=None):
         ("giant", main, 15, 0),
         ("breaker", main, 10, 3),
         ("lavaloon", main, 15, 1),    # 熔岩气球：先去打防空
+        ("balloon", main, 15, 1),     # 气球兵：专炸防御，跟在肉盾后面（防空先打肉盾附近的）
         ("totem", main, 20, 2 + follow),  # 图腾投手：射程远，躲在肉盾后面输出
         ("archer", main, 50, 1 + follow),
         ("minion", main, 30, 1 + follow),  # 亡灵：会飞，越过城墙跟在肉盾后面输出
