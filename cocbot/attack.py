@@ -373,10 +373,11 @@ def _cast_spells(find_all, tpl, log, scene, main):
     for kind in SPELLS:
         if kind not in slots or _card_empty(img, slots[kind]):
             continue
-        if not targets:  # 盲打试过：下兵点在地图边上，往中心走一段还是草地，打空了。认不出目标就留着（法术免费，不亏）
-            log(f"没认出资源建筑，{BAR_NAMES[kind]}留着不放")
-            continue
-        x, y = min(targets, key=lambda t: math.hypot(t[0] - main[0], t[1] - main[1]))
+        if targets:
+            x, y = min(targets, key=lambda t: math.hypot(t[0] - main[0], t[1] - main[1]))
+        else:  # 认不出资源建筑：打主攻点和地图中心的中点，兵正要去打的建筑群（只走一小段会打到草地上）
+            x, y = int((main[0] + CENTER[0]) / 2), int((main[1] + CENTER[1]) / 2)
+            log(f"没认出资源建筑，{BAR_NAMES[kind]}打主攻方向的建筑群")
         tap(_sx(slots[kind]), SLOT_Y)
         time.sleep(0.3)
         for _ in range(6):  # 一次放一个，放到卡变灰为止
