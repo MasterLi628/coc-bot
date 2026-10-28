@@ -47,7 +47,10 @@ LOOP_NUMBERS = [
     ("loop_max", "每轮最多等（秒）", ""),
     ("max_not_home", "几轮回不到村庄就重启游戏", "卡在别的界面时，连续这么多轮就重启游戏"),
 ]
-NUMBERS = ATTACK_NUMBERS + LOOP_NUMBERS
+BUILDER_NUMBERS = [
+    ("keep_builders", "留几个工人不用", "留给自己手动升级（比如城墙），挂机不会占用；0＝全部用上"),
+]
+NUMBERS = ATTACK_NUMBERS + LOOP_NUMBERS + BUILDER_NUMBERS
 
 # ---------- 配色（浅色, 深色） ----------
 FONT = "Microsoft YaHei UI"
@@ -824,6 +827,7 @@ class App(ctk.CTk):
         # ---- 功能开关 ----
         feat = self.section(scroll, "功能", "关掉的功能挂机时就不做")
         feat.grid(row=1, column=0, sticky="nsew", padx=(0, 8), pady=(0, 16))
+        self.nums = {}
         self.attack = tk.BooleanVar(value=cfg["attack"])
         self.th_first = tk.BooleanVar(value=cfg["townhall_first"])
         self.research = tk.BooleanVar(value=cfg["research"])
@@ -834,11 +838,12 @@ class App(ctk.CTk):
                 (self.research, "实验室自动研究", "优先研究最常用的兵种"),
                 (self.walls_full, "城墙只在金币存满时才升", "免得把升大本营的金币花在城墙上"))):
             self.switch_row(feat.body, r, var, name, tip)
+        for i, (key, name, tip) in enumerate(BUILDER_NUMBERS):
+            self.number_row(feat.body, r + 1 + i, key, name, tip, cfg)
 
         # ---- 进攻 ----
         atk = self.section(scroll, "进攻", "挑对手的标准")
         atk.grid(row=1, column=1, sticky="nsew", padx=(8, 0), pady=(0, 16))
-        self.nums = {}
         for r, (key, name, tip) in enumerate(ATTACK_NUMBERS):
             self.number_row(atk.body, r, key, name, tip, cfg)
 
