@@ -102,7 +102,8 @@ def _lab_by_tag(img, find_all_scaled):
     scales = [s / 100 for s in range(60, 141, 5)]  # 字跟着地图缩放，尺寸差一点就认不出，所以挡位分得细
     # 只在地图上找：选中实验室时底部按钮上也有"研究"两个字
     # 字很小，背后的地面颜色一变（换阵型后挨着红色范围圈）分数就掉到 0.65~0.72；"训练"等别处都不到 0.55
-    return [(x, y + 55) for x, y in find_all_scaled(img[:780], tag, 0.6, scales) if y < 720]
+    # 实验室离字多远跟着地图缩放变（35~45 像素），从近到远各点一次（_select_lab 点的时候还会再往下 10）
+    return [(x, y + d) for x, y in find_all_scaled(img[:780], tag, 0.6, scales) if y < 720 for d in (25, 40, 55)]
 
 
 def _lab_from_menu(find_all, tpl):
@@ -140,7 +141,7 @@ def _select_lab(find_all, find_all_scaled, tpl, log):
     tap(*DESELECT)  # 先取消选中别的建筑，底部按钮栏收起来
     time.sleep(0.8)
     img = _safe_shot(find_all, tpl)
-    for x, y in (_lab_by_tag(img, find_all_scaled) + _lab_candidates(img, find_all_scaled))[:3]:
+    for x, y in (_lab_by_tag(img, find_all_scaled) + _lab_candidates(img, find_all_scaled))[:4]:
         tap(x, y + 10)
         time.sleep(1.5)
         img = _safe_shot(find_all, tpl)
