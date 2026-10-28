@@ -22,6 +22,7 @@ from .attack import attack, fill_army
 from .stats import choose_plan
 from .lab import try_potion, try_research
 from .pinch import pinch_out
+from .scout import read_mask
 from .upgrade import DESELECT, cancel_placement, close_windows, danger_on_screen, try_build_new, try_townhall, try_upgrade
 
 TEMPLATES = config.TEMPLATES
@@ -35,6 +36,7 @@ TOWNHALL_FIRST = CFG["townhall_first"]          # 大本营优先：钱够先升
 LOOP_MIN, LOOP_MAX = CFG["loop_min"], CFG["loop_max"]  # 每轮间隔秒数（随机）
 MAX_NOT_HOME = CFG["max_not_home"]              # 连续几轮不在主界面就重启游戏
 RESEARCH = CFG["research"]                      # 实验室自动研究
+KEEP_BUILDERS = CFG["keep_builders"]            # 留几个工人给玩家自己用
 LAB_INTERVAL = 1800                             # 每隔多少秒看一次实验室
 ERROR_WAIT = 60               # 出错后等多少秒再重试
 
@@ -141,6 +143,31 @@ def no_free_builder(img):
     if icon is None:
         return True
     return any(icon < x < icon + 140 for x, _ in zeros)
+
+
+def free_builders(img):
+    """顶部"空闲工人/总数"里的空闲数，读不出来返回 None。"""
+    bar = img[0:100]
+    icon = find_all(bar, TPL["builder_icon"], 0.8)
+    if not icon:
+        return None
+    x = icon[0][0]
+    hsv = cv2.cvtColor(img[25:78, x + 40:x + 150], cv2.COLOR_BGR2HSV)
+    m = ((hsv[..., 1] < 70) & (hsv[..., 2] > 200)).astype("uint8")
+    n, _, st, _ = cv2.connectedComponentsWithStats(m)
+    comps = sorted(tuple(st[i]) for i in range(1, n) if 15 <= st[i, 3] <= 30 and st[i, 4] >= 60)
+    if not comps:
+        return None
+    return read_mask(m[:, comps[0][0]:comps[0][0] + comps[0][2]])  # 最左边那个数字就是空闲数
+
+
+def builders_reserved(img):
+    """空闲工人只剩要留给玩家的那几个了（或者一个都没有），不再派活。
+    读不出数字时，没设置留工人就按老办法看"0/x"，设置了就保守地当作没有可用的。"""
+    if not KEEP_BUILDERS:
+        return no_free_builder(img)
+    free = free_builders(img)
+    return free is None or free <= KEEP_BUILDERS
 
 
 def lab_busy(img):
@@ -261,8 +288,8 @@ def one_round():
     n = collect(img)
     log(f"收集了 {n} 个资源" if n else "暂无可收集资源")
     time.sleep(random.uniform(1, 2))
-    if no_free_builder(screenshot()):
-        log("工人都在忙，跳过升级")
+    if builders_reserved(screenshot()):
+        log("工人都在忙，跳过升级" + (f"（留了 {KEEP_BUILDERS} 个给陛下）" if KEEP_BUILDERS else ""))
     else:
         skip_gold = False   # 金币留着升大本营，升级时只花圣水
         build_gold = False  # 造新建筑时可以花金币（大本营要求先造齐新建筑）
@@ -296,12 +323,12 @@ def one_round():
             time.sleep(random.uniform(1, 2))
         # 先造新建筑（城墙、防御塔），再升级已有建筑
         built = 0
-        while built < 30 and try_build_new(find_all, find_all_scaled, TPL, log, skip_gold and not build_gold):
+        while built < 30 and not builders_reserved(screenshot()) and try_build_new(find_all, find_all_scaled, TPL, log, skip_gold and not build_gold):
             built += 1
             time.sleep(random.uniform(0.5, 1.5))
         while True:
             img = screenshot()
-            if no_free_builder(img):
+            if builders_reserved(img):
                 break
             allow_walls = not CFG["walls_only_when_full"] or gold_full(img)
             if not try_upgrade(find_all, find_all_scaled, TPL, log, skip_gold, allow_walls, offense_first):
