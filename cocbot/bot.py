@@ -52,7 +52,7 @@ TPL = {name: load(name) for name in [
     "popup_busy", "gem_icon", "builders_zero", "townhall", "label_townhall",
     "shop_arrow", "place_ok", "place_cancel", "event_back", "popup_nogem", "btn_claim",
     "btn_continue", "army_not_full", "redline_msg",
-    "web_back", "login_screen", "label_lab", "btn_research", "lab_title", "th_locked", "btn_end_battle", "btn_reload", "btn_panel_collapse", "th_warn",
+    "web_back", "login_screen", "login_qq_auth", "label_lab", "btn_research", "lab_title", "th_locked", "btn_end_battle", "btn_reload", "btn_panel_collapse", "th_warn",
     "army_title", "tip_bubble", "sp_attack", "sp_win", "sp_tab", "end_confirm",
     "potion_btn", "potion_title", "potion_ok", "unit_hour", "unit_min",
     "unit_hour_s", "unit_min_s", "bpotion_btn", "bpotion_title", "bpotion_ok",
@@ -212,8 +212,13 @@ def recover(img):
     return close_windows(find_all, find_all_scaled, TPL, log)
 
 
+def logged_out(img):
+    """停在登录界面，或者已经点进了"QQ 授权登录"扫码页（挂机在登录界面上乱点会点进去）。"""
+    return bool(find_all(img, TPL["login_screen"], 0.8) or find_all(img, TPL["login_qq_auth"], 0.8))
+
+
 def restart_game():
-    if find_all(screenshot(), TPL["login_screen"], 0.8):
+    if logged_out(screenshot()):
         return False  # 在登录界面重启也没用
     log("重启游戏")
     adb("shell", "am", "force-stop", PACKAGE)
@@ -247,7 +252,7 @@ TH_PAUSE = 6 * 3600
 def one_round():
     global _not_home
     img = screenshot()
-    if find_all(img, TPL["login_screen"], 0.8):
+    if logged_out(img):
         # 一般是同一个账号在手机上登录，把模拟器挤下线了；登录要本人操作，挂机直接停掉
         raise LoggedOut
     reload = find_all(img, TPL["btn_reload"], 0.8)
