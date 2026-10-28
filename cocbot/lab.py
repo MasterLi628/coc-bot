@@ -45,10 +45,11 @@ def _research_order():
 
 
 def _lab_candidates(img, find_all_scaled):
-    """按 templates/lab_*.png（每个等级一张）找实验室。"""
+    """按 templates/lab_*.png（每个等级一张）找实验室。正在研究时头顶没有"研究"字样，只能靠这个认；
+    实验室升级后长相会变，要补一张新等级的（lab_5 是 5 级正在研究时截的）。"""
     pts = []
     for f in sorted(TEMPLATES.glob("lab_*.png")):
-        if f.stem == "lab_title":
+        if f.stem in ("lab_title", "lab_idle_tag"):
             continue
         for x, y in find_all_scaled(img[130:720, 120:1460], imread(f), 0.7, (0.45, 0.5, 0.55, 0.6, 0.7, 0.8, 0.9, 1.0, 1.15, 1.3)):
             pts.append((x + 120, y + 130))
