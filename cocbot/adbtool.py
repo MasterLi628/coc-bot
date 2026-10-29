@@ -34,19 +34,37 @@ def device():
     return devs[0] if devs else None
 
 
+_dev = (None, 0.0)  # (设备编号, 查到的时间)：每条 adb 命令都去查一遍设备太慢，30 秒内沿用
+
+
+def _cached_device():
+    global _dev
+    if _dev[0] is None or time.time() - _dev[1] > 30:
+        _dev = (device(), time.time())
+    return _dev[0]
+
+
 def adb(*args, binary=False):
-    out = subprocess.run([ADB, "-s", device() or PREFERRED or "emulator-5554", *args], capture_output=True, check=True, timeout=30,
-                         creationflags=NO_WINDOW).stdout
+    global _dev
+    try:
+        out = subprocess.run([ADB, "-s", _cached_device() or PREFERRED or "emulator-5554", *args], capture_output=True,
+                             check=True, timeout=30, creationflags=NO_WINDOW).stdout
+    except (OSError, subprocess.SubprocessError):
+        _dev = (None, 0.0)  # 模拟器可能重启换了编号，下次重新查
+        raise
     return out if binary else out.decode("utf-8", "ignore")
 
 
 def screenshot():
-    """返回 BGR 图像（numpy）。"""
-    png = adb("exec-out", "screencap", "-p", binary=True)
-    img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
-    if img is None:
-        raise RuntimeError("截图失败（模拟器可能没开或者卡住了）")
-    return img
+    """返回 BGR 图像（numpy）。
+    不加 -p：模拟器直接传原始像素（文件头 + RGBA），省掉在模拟器里压 PNG 的时间，比 PNG 快一倍多，画面完全一样。"""
+    raw = adb("exec-out", "screencap", binary=True)
+    if len(raw) >= 12:
+        w, h = (int(v) for v in np.frombuffer(raw[:8], np.uint32))
+        body = len(raw) - w * h * 4  # 文件头 12 或 16 字节（新版 Android 多一个色彩空间字段）
+        if 0 < w <= 8000 and 0 < h <= 8000 and body in (12, 16):
+            return cv2.cvtColor(np.frombuffer(raw, np.uint8, offset=body).reshape(h, w, 4), cv2.COLOR_RGBA2BGR)
+    raise RuntimeError("截图失败（模拟器可能没开或者卡住了）")
 
 
 def screen_size():
