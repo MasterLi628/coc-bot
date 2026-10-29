@@ -336,8 +336,11 @@ def try_potion(find_all, find_all_scaled, tpl, log):
         img = screenshot()
         ok = find_all(img, tpl["potion_ok"], 0.8)
         if not (ok and find_all(img, tpl["potion_title"], 0.8)):
-            log("实验室：没出现\"加速研究\"确认框，不用药水（截图存在 debug\研究药水.png）")
-            save_debug(img, "研究药水")
+            if find_all(img, tpl["potion_none"], 0.8):  # 标题是"研究药水"、只有"获取"按钮（去商店买），说明药水用完了
+                log("实验室：研究药水用完了，不用")
+            else:
+                log("实验室：没出现\"加速研究\"确认框，不用药水（截图存在 debug\研究药水.png）")
+                save_debug(img, "研究药水")
             close_windows(find_all, find_all_scaled, tpl, log)
             return False
         tap(*ok[0])
