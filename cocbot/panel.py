@@ -636,7 +636,7 @@ class App(ctk.CTk):
             messagebox.showinfo("发现新兵种", msg)
 
     def start(self):
-        if config.running_pid():
+        if config.running_pid() or time.time() < self.starting_until:
             return
         cfg = self.collect()
         if cfg is None:

@@ -403,6 +403,15 @@ def main():
 
 def run():
     """入口：防重复启动、记下进程号，然后一直挂机。"""
+    with config.bot_lock() as acquired:
+        if not acquired:
+            log("已经有一个挂机在运行，这个不启动了。要重开请先在控制面板点\"停止\"")
+            raise SystemExit(1)
+        _run_locked()
+
+
+def _run_locked():
+    # 兼容还没使用文件锁的旧版本；检查和写入都在锁内执行。
     other = running_pid()
     if other:
         log(f"已经有一个挂机在运行（进程 {other}），这个不启动了。要重开请先在控制面板点\"停止\"")

@@ -3,6 +3,7 @@ import json
 import os
 import string
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 APP_NAME = "部落冲突挂机"                # 打包后 exe 的名字
@@ -105,6 +106,35 @@ def find_adb():
 # 放在用户目录里，源码版和打包版共用，两边不会同时挂机
 PID_FILE = Path(os.environ.get("LOCALAPPDATA") or BASE) / "coc-bot" / "bot.pid"
 PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+
+@contextmanager
+def bot_lock(path=None):
+    """原子地抢占挂机锁；强制结束进程时 Windows 也会自动释放。
+
+    锁文件独立于 PID 文件，避免面板读取 PID 或退出时删 PID 影响锁。
+    源码和打包版共用同一个位置，锁必须持有到整个挂机循环结束。
+    """
+    import msvcrt
+    path = path if path is not None else PID_FILE.with_suffix(".lock")
+    with open(path, "a+b") as f:
+        f.seek(0, os.SEEK_END)
+        if not f.tell():
+            f.write(b"\0")
+            f.flush()
+        f.seek(0)
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            if exc.errno not in (13, 36):  # EACCES / EDEADLK：已被其他进程占用
+                raise
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def _pid_alive(pid):
