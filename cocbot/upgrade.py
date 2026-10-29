@@ -226,6 +226,8 @@ def _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned, offense_fir
             if ident(r) == target and _usable(r, skip_gold, allow_walls, banned):
                 tap(mx + 75, r["y"])
                 time.sleep(2)
+                if not _find_upgrade_btn(_safe_shot(find_all, tpl), tpl):
+                    close_menu(find_all, tpl)  # 菜单翻过页再点，菜单有时不收起，盖住了底部的升级按钮
                 res = _press_upgrade(find_all, tpl, log, name)
                 return target if res == "skip" else res
     log(f"第二遍没在菜单里找到{name}")
