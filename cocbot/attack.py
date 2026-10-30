@@ -182,13 +182,13 @@ def _card_empty(img, slot):
     return float(hsv[..., 1].mean()) < 25 or float(hsv[..., 2].mean()) < 100
 
 
-def _find_edge(find_all, tpl, slot, angle):
+def _find_edge(find_all, tpl, slot, angle, step=28):
     """沿 angle 方向从外往里试，返回第一个能放兵的点；找不到返回 None。
-    试到能放的那一下会真的放出 1 个兵。"""
+    试到能放的那一下会真的放出 1 个兵。step 调大就是粗扫（绕着村庄找方向时用）。"""
     rad = math.radians(angle)
     dx, dy = math.cos(rad), math.sin(rad) * 0.75  # 等距视角，上下方向压扁一点
     before = _card(screenshot(), slot)
-    for r in range(1000, 120, -28):
+    for r in range(1000, 120, -step):
         x, y = int(CENTER[0] + dx * r), int(CENTER[1] + dy * r)
         if not (20 <= x <= 1580 and SCREEN_Y[0] <= y <= SCREEN_Y[1]) or _blocked(x, y):
             continue
@@ -461,6 +461,16 @@ def _deploy(find_all, tpl, log, style=None):
                                         if not _card_empty(screenshot(), slots[first])) if q]
         else:
             points = _edges(find_all, tpl, slots[first], angles)
+        if not points and not _card_empty(screenshot(), slots[first]):
+            # 主攻方向被城墙挡死了：绕着村庄扫一圈，找个能放兵的方向（新版本阵型经常围成一整圈）
+            for a in range(0, 360, 30):
+                if _card_empty(screenshot(), slots[first]):
+                    break
+                q = _find_edge(find_all, tpl, slots[first], a, step=80)
+                if q:
+                    points = [q]
+                    log(f"主攻方向放不下，改从 {a}° 下兵")
+                    break
         if points or not _card_empty(screenshot(), slots[first]):
             break  # 找到了；或者卡还有兵却哪都放不下，换卡也一样
     if not points:
@@ -578,8 +588,9 @@ def attack(find_all, tpl, log, need_gold=True, need_elixir=True, plan=""):
         tap(1300, 600)  # 点右边村庄空地收起进攻页面
         return False
     tap(*btn)
-    btn = _wait_for(find_all, tpl["btn_army_attack"], 8)
-    if btn:  # 有时会先弹出军队界面
+    # 有时会先弹出军队界面：没搜索对手时是灰色的"进攻"，搜索好了是绿色的"进攻！"
+    btn = _wait_for(find_all, tpl["btn_army_attack"], 6) or _wait_for(find_all, tpl["btn_army_attack2"], 4)
+    if btn:
         tap(*btn)
     nxt = _wait_for(find_all, tpl["btn_next"], 30)
     if not nxt:
@@ -833,23 +844,36 @@ def _fill_cc(find_all, tpl, log):
         log("免费部落援军已选好：法师、弓箭手")
 
 
+def _open_army(find_all, tpl):
+    """打开军队界面：新版本点左下角的"战斗"按钮，再点面板里的"编辑军队"。
+    打不开就返回当时的截图（里面不会有 army_title）。"""
+    img = screenshot()
+    pts = find_all(img, tpl["home_attack"], 0.8)
+    if not pts:
+        return img
+    tap(*pts[0])
+    time.sleep(1.5)
+    edit = find_all(screenshot(), tpl["btn_edit_army"], 0.8)
+    if not edit:
+        return screenshot()
+    tap(*edit[0])
+    time.sleep(2)
+    return screenshot()
+
+
 def fill_army(find_all, tpl, log, plan):
     """按配兵方案 plan（stats.PLANS 里的名字）配兵：方案换了、人口没满（数字旁有红色感叹号）、
     或者这次启动还没配过，就清空重配。方案里有兵种现在没有（比如限时兵种下架了），就换一套配得出来的方案；
     剩下的人口补野蛮人。军队是免费的，重配不花钱。然后补满法术、（免费时）选部落援军。返回实际用的方案名。
     军队界面没打开（比如重启后活动广告晚一步弹出来盖住了村庄）返回 None，这轮不打，免得在活动页面里乱点。"""
-    tap(65, 652)
-    time.sleep(2)
-    img = screenshot()
+    img = _open_army(find_all, tpl)
     if not find_all(img, tpl["army_title"], 0.8):
         log("军队界面没打开，这轮不打（截图存在 debug\\军队界面没打开.png）")
         save_debug(img, "军队界面没打开")
         return None
     if _army_plan != plan or _not_full(find_all, tpl, img, "troops"):
         plan = _fill_troops(find_all, tpl, log, plan, img)  # 配完会关掉军队界面
-        tap(65, 652)
-        time.sleep(2)
-        img = screenshot()
+        img = _open_army(find_all, tpl)
     if _SPELL and _not_full(find_all, tpl, img, "spells"):
         _fill_spells(find_all, tpl, log)
         img = screenshot()

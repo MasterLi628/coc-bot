@@ -46,9 +46,10 @@ def load(name):
 
 
 TPL = {name: load(name) for name in [
-    "home_attack", "collect_gold", "collect_elixir",
+    "home_attack", "new_home_label", "collect_gold", "collect_elixir", "connection_lost", "upgrade_label",
+    "game_update", "game_update_prompt", "upgrade_time",
     "builder_icon", "menu_suggest", "btn_upgrade", "confirm_label", "close_x",
-    "btn_search", "btn_army_attack", "btn_next", "btn_return",
+    "btn_search", "btn_army_attack", "btn_army_attack2", "btn_edit_army", "btn_next", "btn_return",
     "popup_busy", "gem_icon", "builders_zero", "townhall", "label_townhall",
     "shop_arrow", "place_ok", "place_cancel", "event_back", "popup_nogem", "btn_claim",
     "btn_continue", "army_not_full", "redline_msg",
@@ -104,9 +105,24 @@ def log(msg):
 
 
 def is_home(img):
+    if connection_lost(img) or find_all(img, TPL["btn_reload"], 0.8):
+        return False
     if find_all(img[60:180, 40:160], TPL["event_back"], 0.8):  # 活动广告盖在主界面上
         return False
-    return bool(find_all(img, TPL["home_attack"], 0.8))
+    return bool(find_all(img, TPL["home_attack"], 0.8) or is_new_home(img))
+
+
+def is_new_home(img):
+    return bool(find_all(img[810:890, 20:190], TPL["new_home_label"], 0.9))
+
+
+def connection_lost(img):
+    """服务连接错误会盖在村庄上；背景的进攻按钮仍然能匹配。"""
+    return bool(find_all(img[330:570, 380:1220], TPL["connection_lost"], 0.9))
+
+
+def game_updating(img):
+    return bool(find_all(img[:110, 650:950], TPL["game_update"], 0.9))
 
 
 def collect(img):
@@ -137,8 +153,12 @@ def _top_zeros(img):
 
 
 def no_free_builder(img):
-    """顶部工人数是不是 0/x（工人图标右边那个数）。
-    找不到工人图标（比如被弹窗挡住）就当作没空闲工人，这轮先不升级，免得点出"花宝石买工人"的窗口。"""
+    """工人是不是都在忙。
+    新版本：右下角显示"空闲/总数"，读出来是 0 就是没空闲工人；读不出来也不升级，
+    免得点出"花宝石买工人"的窗口。"""
+    if is_new_home(img):
+        free = free_builders(img)
+        return free is None or free == 0
     icon, zeros = _top_zeros(img)
     if icon is None:
         return True
@@ -147,6 +167,10 @@ def no_free_builder(img):
 
 def free_builders(img):
     """顶部"空闲工人/总数"里的空闲数，读不出来返回 None。"""
+    if is_new_home(img):
+        hsv = cv2.cvtColor(img[676:711, 1423:1448], cv2.COLOR_BGR2HSV)
+        mask = ((hsv[..., 1] < 70) & (hsv[..., 2] > 200)).astype('uint8')
+        return read_mask(mask)
     bar = img[0:100]
     icon = find_all(bar, TPL["builder_icon"], 0.8)
     if not icon:
@@ -171,23 +195,35 @@ def builders_reserved(img):
 
 
 def lab_busy(img):
-    """顶部实验室空位是不是 0/x（工人图标左边那个数，正在研究）。
-    找不到工人图标（比如被弹窗挡住）就当作实验室在忙，这轮先不去找实验室。"""
+    """实验室是不是正在研究。
+    新版本：右下角工人旁边显示"研究中/总数"，前面那个数大于 0 就是有实验室在忙。
+    读不出来就当作在忙，这轮先不去找实验室。"""
+    if is_new_home(img):
+        hsv = cv2.cvtColor(img[682:710, 1514:1542], cv2.COLOR_BGR2HSV)
+        mask = ((hsv[..., 1] < 70) & (hsv[..., 2] > 200)).astype("uint8")
+        n = read_mask(mask)  # "空闲/总数"里的空闲数
+        return n is None or n == 0
     icon, zeros = _top_zeros(img)
     if icon is None:
         return True
     return any(icon - 220 < x < icon - 20 for x, _ in zeros)
 
 
+def _bar_filled(img, y0, y1, h0, h1, s_min, v_min):
+    """资源条右端那一小截是不是彩色的：填满了才会一直顶到右端。新版本 UI 的资源条在右上角。"""
+    px = cv2.cvtColor(img[y0:y1, 1520:1538], cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    h, s, v = (float(x) for x in px.mean(0))
+    return h0 <= h <= h1 and s > s_min and v > v_min
+
+
 def gold_full(img):
-    """金币是否满了（看资源条最左端那一小截有没有被填满）。"""
-    h, s, _ = (int(v) for v in cv2.cvtColor(img[50:51, 1266:1267], cv2.COLOR_BGR2HSV)[0, 0])
-    return 20 <= h <= 28 and s > 220
+    """金币是否满了（右上角金币条填到右端）。"""
+    return _bar_filled(img, 40, 60, 18, 32, 120, 150)
 
 
 def elixir_full(img):
-    h, s, _ = (int(v) for v in cv2.cvtColor(img[122:123, 1290:1291], cv2.COLOR_BGR2HSV)[0, 0])
-    return 135 <= h <= 165 and s > 70  # 圣水条满时这里是紫色
+    """圣水是否满了（右上角圣水条填到右端，满时是亮紫色）。"""
+    return _bar_filled(img, 98, 122, 130, 168, 100, 150)
 
 
 def storage_full(img):
@@ -226,7 +262,13 @@ def restart_game():
     adb("shell", "monkey", "-p", PACKAGE, "-c", "android.intent.category.LAUNCHER", "1")
     for _ in range(40):
         time.sleep(3)
-        if is_home(screenshot()):
+        img = screenshot()
+        if logged_out(img):
+            raise LoggedOut
+        if game_updating(img):
+            log("游戏需要更新，交给主循环处理，停止重复重启")
+            return False
+        if is_home(img):
             log("已重新进入村庄")
             return True
     log("重启后 2 分钟还没进村庄")
@@ -242,6 +284,8 @@ class LoggedOut(Exception):
 
 
 _not_home = 0
+_connection_failures = 0
+_last_update_click = 0
 _last_lab = 0
 _last_potion = 0
 POTION_INTERVAL = 2 * 3600  # 隔多久看一次要不要用研究药水
@@ -250,11 +294,37 @@ TH_PAUSE = 6 * 3600
 
 
 def one_round():
-    global _not_home
+    global _not_home, _connection_failures, _last_update_click
     img = screenshot()
     if logged_out(img):
         # 一般是同一个账号在手机上登录，把模拟器挤下线了；登录要本人操作，挂机直接停掉
         raise LoggedOut
+    if game_updating(img):
+        _not_home = 0
+        _connection_failures = 0
+        if find_all(img[350:450, 400:1050], TPL["game_update_prompt"], 0.9):
+            if time.time() - _last_update_click > 60:
+                config.save_debug(img, "游戏更新")
+                log("检测到游戏新版本，确认下载；更新期间暂停操作，不重启游戏")
+                tap(485, 778)
+                _last_update_click = time.time()
+        else:
+            log("游戏正在检查或下载更新，等待完成，不重启游戏")
+        time.sleep(30)
+        return
+    if connection_lost(img):
+        _connection_failures += 1
+        config.save_debug(img, "连接中断")
+        log(f"与游戏服务器失去连接，第 {_connection_failures} 次恢复；暂停村庄操作")
+        if _connection_failures >= 3:
+            log("连续重试仍断线，尝试重启游戏；如仍失败请检查网络或服务器状态")
+            restart_game()
+            _connection_failures = 0
+            time.sleep(60)
+        else:
+            tap(450, 526)  # 已确认的 Android 连接中断弹窗的“重试”，1600x900
+            time.sleep(15)
+        return
     reload = find_all(img, TPL["btn_reload"], 0.8)
     if reload:  # "还在吗？因为太久没有进行操作，您已断开连接" 半透明盖在村庄上，点"重新载入游戏"
         log("太久没操作被断开了，重新载入游戏")
@@ -275,6 +345,7 @@ def one_round():
         time.sleep(5)
         return
     _not_home = 0
+    _connection_failures = 0
     if cancel_placement(img, TPL, log):
         time.sleep(1)
         return

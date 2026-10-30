@@ -14,7 +14,7 @@ import numpy as np
 
 from .adbtool import screenshot, swipe, tap
 from .config import BUILDINGS, CFG, NEVER_UPGRADE, RESOURCE, TEMPLATES, imread, priority, save_debug
-from .menu import menu_left, read_rows
+from .menu import CLICK_X, read_rows
 
 DESELECT = (1590, 340)  # 地图右侧空地/树林，点了没副作用（5 本后右边 y≈395~500 多了村民委托浮窗，别点到）
 X_SCALES = (0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5)
@@ -118,21 +118,31 @@ def try_upgrade(find_all, find_all_scaled, tpl, log, skip_gold=False, allow_wall
     return False
 
 
-MAX_PAGES = 8  # 工人菜单最多往下翻几页
+MAX_PAGES = 8  # "建筑和英雄"侧栏最多往下翻几页
+
+# 新版本（2026-10 UI 改版）：工人菜单换成了右下角"建造"按钮划出的"建筑和英雄"侧栏
+BUILD_BTN = (1490, 800)        # 右下角"建造"按钮，点一下划出侧栏
+SIDEBAR_CLOSE = (1575, 25)     # 侧栏右上角的 X
+SIDEBAR_DARK = 90              # 侧栏打开时右半边是深色面板，灰度均值低于这个数
+
+
+def sidebar_open(img):
+    """右侧的"建筑和英雄"侧栏是不是已经划出来了。面板是半透明深色的，村庄那块被压暗。"""
+    g = cv2.cvtColor(img[120:800, 1168:1185], cv2.COLOR_BGR2GRAY)
+    return float(g.mean()) < SIDEBAR_DARK
 
 
 def _open_menu(find_all, tpl):
-    """打开工人菜单，返回菜单左边 mx；打不开返回 None。"""
-    img = _safe_shot(find_all, tpl)
-    icons = find_all(img, tpl["builder_icon"], 0.8)
-    if not icons:
-        return None
-    tap(*icons[0])
+    """划出"建筑和英雄"侧栏，成功返回 True。每次都关掉重开，保证列表在顶部。"""
+    if sidebar_open(_safe_shot(find_all, tpl)):
+        tap(*SIDEBAR_CLOSE)
+        time.sleep(1)
+    tap(*BUILD_BTN)
     time.sleep(1.5)
-    if not find_all(_safe_shot(find_all, tpl), tpl["menu_suggest"], 0.8):
+    if not sidebar_open(_safe_shot(find_all, tpl)):
         tap(*DESELECT)
         return None
-    return menu_left(_safe_shot(find_all, tpl), icons[0][0])
+    return True
 
 
 def walls_first():
@@ -153,27 +163,32 @@ def _usable(row, skip_gold, allow_walls, banned):
 
 
 def close_menu(find_all, tpl):
-    """点完菜单里的某一行后，再点一下工人图标收起菜单。建筑仍保持选中，菜单不会再挡住底部的建筑名字。"""
-    icons = find_all(_safe_shot(find_all, tpl), tpl["builder_icon"], 0.8)
-    if icons:
-        tap(*icons[0])
+    """收起侧栏。建筑还保持着选中，侧栏不会再挡住底部按钮。"""
+    if sidebar_open(_safe_shot(find_all, tpl)):
+        tap(*SIDEBAR_CLOSE)
         time.sleep(1)
 
 
-def _pages(find_all, tpl, mx):
-    """一页页往下翻菜单，每页返回 (截图, 行)，翻到底就停。"""
+def _pages(find_all, tpl, mx=None):
+    """一页页往下翻侧栏，每页返回 (截图, 行)，翻到底就停。mx 是老版本工人菜单的列坐标，留着兼容。"""
     last = None
     for page in range(MAX_PAGES):
         if page:
-            swipe(mx + 170, 620, mx + 170, 330, 800)
+            swipe(1380, 700, 1380, 330, 800)
             time.sleep(1.2)
         img = _safe_shot(find_all, tpl)
-        rows = read_rows(img, mx)
-        sig = [(r["key"], r["cur"], r["y"] // 8) for r in rows]
+        rows = read_rows(img)
+        sig = [(r["key"], r["cur"], r["price"]) for r in rows]
         if sig == last:
             return
         last = sig
         yield img, rows
+
+
+def _leave(find_all, tpl):
+    """收起侧栏再点空地取消选中：侧栏开着的时候点空地会点到侧栏里的行。"""
+    close_menu(find_all, tpl)
+    tap(*DESELECT)
 
 
 def _sort_key(rule, rank, offense_first=False):
@@ -207,6 +222,7 @@ def _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned, offense_fir
         for r in rows:
             if _usable(r, skip_gold, allow_walls, banned) and (best is None or key(r) < key(best)):
                 best = r
+    close_menu(find_all, tpl)  # 侧栏盖着地图，先收起再点空地
     tap(*DESELECT)
     time.sleep(1)
     if not best:
@@ -224,14 +240,18 @@ def _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned, offense_fir
     for _, rows in _pages(find_all, tpl, mx):
         for r in rows:
             if ident(r) == target and _usable(r, skip_gold, allow_walls, banned):
-                tap(mx + 75, r["y"])
+                tap(CLICK_X, r["y"] + 10)
                 time.sleep(2)
-                if not _find_upgrade_btn(_safe_shot(find_all, tpl), tpl):
+                img = _safe_shot(find_all, tpl)
+                if upgrade_dialog(img, find_all, tpl):  # 新版本：点这一行就直接弹出升级窗口
+                    res = _press_dialog(find_all, tpl, log, name)
+                    return target if res == "skip" else res
+                if not _find_upgrade_btn(img, tpl):
                     close_menu(find_all, tpl)  # 菜单翻过页再点，菜单有时不收起，盖住了底部的升级按钮
                 res = _press_upgrade(find_all, tpl, log, name)
                 return target if res == "skip" else res
     log(f"第二遍没在菜单里找到{name}")
-    tap(*DESELECT)
+    _leave(find_all, tpl)
     return False
 
 
@@ -248,6 +268,17 @@ def _find_upgrade_btn(img, tpl):
         _, mv, _, ml = cv2.minMaxLoc(r)
         if mv >= 0.8 and (best is None or mv > best[0]):
             best = (mv, ml[0] + t.shape[1] // 2, ml[1] + 560 + t.shape[0] // 2, s)
+    if best:
+        return best[1:]
+    # 强化动画会覆盖按钮图案，保留的“升级”文字用于兜底。
+    # 只在底部按钮栏搜索；仍走后续资源/宝石确认检查。
+    label = tpl["upgrade_label"]
+    for s in UPGRADE_SCALES:
+        t = cv2.resize(label, None, fx=s, fy=s)
+        r = cv2.matchTemplate(img[700:790], t, cv2.TM_CCOEFF_NORMED)
+        _, score, _, pos = cv2.minMaxLoc(r)
+        if score >= 0.9 and (best is None or score > best[0]):
+            best = (score, pos[0] + t.shape[1] // 2, pos[1] + 700 + t.shape[0] // 2, s)
     return best[1:] if best else None
 
 
@@ -281,9 +312,69 @@ def check_confirm(find_all, tpl, log, img, name):
     return cx, cy
 
 
+def upgrade_dialog(img, find_all, tpl):
+    """点侧栏里的一行就直接弹出升级窗口了：底部右边写着"升级时间"。"""
+    return bool(find_all(img[700:820, 1150:1450], tpl["upgrade_time"], 0.8))
+
+
+def _green_button(img):
+    """升级窗口底部绿色的大按钮（花金币/圣水确认的那个），返回 (中心 x, 中心 y, 宽) 或 None。
+    左边灰的是"建筑之锤"（要宝石的道具），永远不点；左边那一大块绿色是建筑预览图，也排除。"""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    m = ((h >= 32) & (h <= 78) & (s > 90) & (v > 140)).astype("uint8")
+    m[:700] = 0      # 底部按钮栏以上不要
+    m[:, :880] = 0   # 左边的建筑预览图不要
+    n, _, st, cents = cv2.connectedComponentsWithStats(m)
+    best = None
+    for i in range(1, n):
+        x, y, w, ht, area = st[i]
+        if area >= 8000 and w >= 150 and ht >= 50 and (best is None or area > best[0]):
+            best = (area, int(cents[i][0]), int(cents[i][1]), int(w))
+    return best[1:] if best else None
+
+
+def _confirm_icon(img, cx, cy, w):
+    """绿色确认按钮右边的资源图标是什么：gold / elixir / dark / gem / None。
+    宝石（要花宝石买资源）会被当成危险，不点。"""
+    from .menu import _cursor
+    hsv = cv2.cvtColor(img[cy - 26:cy + 26, cx + w // 2 - 60:cx + w // 2 - 6], cv2.COLOR_BGR2HSV)
+    return _cursor(hsv) if hsv.size else None
+
+
+def _press_dialog(find_all, tpl, log, name):
+    """新版本：升级窗口已经弹出来了，检查一下绿色确认按钮就点。"""
+    img = _safe_shot(find_all, tpl)
+    btn = _green_button(img)
+    if not btn:
+        log(f"{name}的升级窗口里没找到绿色确认按钮（截图存在 debug\\{name}_没找到确认.png）")
+        save_debug(img, f"{name}_没找到确认")
+        raise Danger
+    cx, cy, w = btn
+    cur = _confirm_icon(img, cx, cy, w)
+    if cur not in ("gold", "elixir", "dark"):
+        log(f"{name}的确认按钮不是金币/圣水（像是宝石），取消")
+        raise Danger
+    tap(cx + random.randint(-10, 10), cy + 10 + random.randint(-4, 4))
+
+    for _ in range(4):
+        time.sleep(1)
+        img = _safe_shot(find_all, tpl)
+    if upgrade_dialog(img, find_all, tpl):
+        log(f"确认后升级窗口还在，当作失败处理（截图存在 debug\\{name}_确认后窗口还在.png）")
+        save_debug(img, f"{name}_确认后窗口还在")
+        raise Danger
+    log(f"已开始升级{name}")
+    _try_builder_potion(find_all, tpl, log, name)
+    close_menu(find_all, tpl)
+    return True
+
+
 def _press_upgrade(find_all, tpl, log, name):
     """建筑已选中：点"升级"→检查→点"确认"。返回 True / "skip"（没有升级按钮）/ "locked"（升级条件没满足）。"""
     img = _safe_shot(find_all, tpl)
+    if upgrade_dialog(img, find_all, tpl):  # 新版本点侧栏的行就直接弹出升级窗口
+        return _press_dialog(find_all, tpl, log, name)
     btn = _find_upgrade_btn(img, tpl)
     if not btn:
         log(f"没找到升级按钮，换下一项（截图存在 debug\没找到升级按钮_{name}.png）")
@@ -427,7 +518,7 @@ def _focus_townhall_from_menu(find_all, tpl):
     for _, rows in _pages(find_all, tpl, mx):
         for r in rows:
             if r["key"] == "townhall":
-                tap(mx + 75, r["y"])
+                tap(CLICK_X, r["y"] + 10)
                 time.sleep(2)
                 close_menu(find_all, tpl)
                 return True
@@ -618,7 +709,7 @@ def _try_build_new(find_all, tpl, log, skip_gold, pick=0):
         tap(*DESELECT)
         return False
     log(f"造新建筑：{BUILDINGS.get(target['key'], '建筑')}")
-    tap(mx + 75, target["y"])
+    tap(CLICK_X, target["y"] + 10)
     time.sleep(2)
 
     # 打开商店，要造的建筑卡片是亮蓝色的，其他是灰色
