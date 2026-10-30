@@ -99,13 +99,13 @@ def _card_price(img, x, y):
 
 
 def _lab_by_tag(img, find_all_scaled):
-    """实验室空闲时头顶有个虚线框的"研究"字样，实验室就在它正下方。"""
+    """实验室头顶有个虚线框的提示（新版本叫"军队升级"），实验室就在它正下方。"""
     tag = imread(TEMPLATES / "lab_idle_tag.png")
     scales = [s / 100 for s in range(60, 141, 5)]  # 字跟着地图缩放，尺寸差一点就认不出，所以挡位分得细
     # 只在地图上找：选中实验室时底部按钮上也有"研究"两个字
     # 字很小，背后的地面颜色一变（换阵型后挨着红色范围圈）分数就掉到 0.65~0.72；"训练"等别处都不到 0.55
     # 实验室离字多远跟着地图缩放变（35~45 像素），从近到远各点一次（_select_lab 点的时候还会再往下 10）
-    return [(x, y + d) for x, y in find_all_scaled(img[:780], tag, 0.6, scales) if y < 720 for d in (25, 40, 55)]
+    return [(x, y + d) for x, y in find_all_scaled(img[:780], tag, 0.6, scales) if y < 720 for d in (60, 75, 90)]
 
 
 def _lab_from_menu(find_all, tpl):

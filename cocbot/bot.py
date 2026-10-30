@@ -49,7 +49,7 @@ TPL = {name: load(name) for name in [
     "home_attack", "new_home_label", "collect_gold", "collect_elixir", "connection_lost", "upgrade_label",
     "game_update", "game_update_prompt", "upgrade_time",
     "builder_icon", "menu_suggest", "btn_upgrade", "confirm_label", "close_x",
-    "btn_search", "btn_army_attack", "btn_army_attack2", "btn_edit_army", "btn_next", "btn_return",
+    "btn_search", "btn_army_attack", "btn_army_attack2", "btn_edit_army", "btn_next", "btn_return", "result_label",
     "popup_busy", "gem_icon", "builders_zero", "townhall", "label_townhall",
     "shop_arrow", "place_ok", "place_cancel", "event_back", "popup_nogem", "btn_claim",
     "btn_continue", "army_not_full", "redline_msg",

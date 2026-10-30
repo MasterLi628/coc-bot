@@ -16,7 +16,7 @@ NAME_X = (1220, 1400)         # 名字那一列
 NAME_Y = (60, 795)            # 面板里能找到的行（上面是标题和进度条，下面被底部按钮挡）
 PRICE_X = (1390, 1568)        # 价格数字区（右对齐，实际数字从哪开始不固定）
 ICON_X = (1570, 1596)         # 每行价格右边的资源图标
-NEW_X = (1170, 1202)          # 左边的绿色"新"字标签
+NEW_X = (1228, 1276)          # 名字下面那个绿色"新"字（和名字左对齐）
 CLICK_X = 1280                # 点某一行的横坐标（名字左边一点，避开价格）
 NAME_MATCH = 0.75
 
@@ -95,7 +95,8 @@ def read_rows(img):
             continue
         a, b = y0 + top, y0 + y
         yc = (a + b) // 2
-        hsv_new = cv2.cvtColor(img[yc - 18:yc + 18, NEW_X[0]:NEW_X[1]], cv2.COLOR_BGR2HSV)
+        # 绿色"新"字标签挂在名字下面一行，不在名字那一行的正中间
+        hsv_new = cv2.cvtColor(img[yc + 2:yc + 42, NEW_X[0]:NEW_X[1]], cv2.COLOR_BGR2HSV)
         new = _count(hsv_new, 35, 85, 120, 150) > 120
         key = _name_of(_white(img[yc - 14:yc + 14, x0:x1]))
         cost = cv2.cvtColor(img[yc + 6:yc + 34, PRICE_X[0]:PRICE_X[1]], cv2.COLOR_BGR2HSV)

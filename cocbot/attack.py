@@ -670,6 +670,9 @@ def _wait_battle_end(find_all, tpl, log, main=None, need=(True, True)):
             pts = find_all(img, t, 0.8)
             if pts:
                 return pts[0], tuple(left), snap
+        if find_all(img, tpl["result_label"], 0.8):
+            # 结算页底部按钮随胜负变样子（回营 / 领取奖励），位置固定在中间下方，认不出就按位置点
+            return (795, 775), tuple(left), snap
         if snap is None and time.time() - start > 30:
             snap = img
         if _take_end_reward(img, log, *need):
