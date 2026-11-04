@@ -18,6 +18,7 @@ from . import config
 from .config import CFG, PID_FILE, running_pid
 from . import attack as attack_mod
 from . import practice as practice_mod
+from . import multiplayer_practice
 from .attack import attack, fill_army
 from .stats import choose_plan
 from .lab import try_potion, try_research
@@ -210,8 +211,8 @@ def lab_busy(img):
 
 
 def _bar_filled(img, y0, y1, h0, h1, s_min, v_min):
-    """资源条右端那一小截是不是彩色的：填满了才会一直顶到右端。新版本 UI 的资源条在右上角。"""
-    px = cv2.cvtColor(img[y0:y1, 1520:1538], cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    """资源条从右往左填充；左端也有颜色才表示已满。"""
+    px = cv2.cvtColor(img[y0:y1, 1255:1273], cv2.COLOR_BGR2HSV).reshape(-1, 3)
     h, s, v = (float(x) for x in px.mean(0))
     return h0 <= h <= h1 and s > s_min and v > v_min
 
@@ -226,9 +227,16 @@ def elixir_full(img):
     return _bar_filled(img, 98, 122, 130, 168, 100, 150)
 
 
+def dark_elixir_full(img):
+    """重油条填充到左端时为满；重油超出仓库上限也视为满。"""
+    px = cv2.cvtColor(img[160:170, 1338:1350], cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    h, s, v = (float(x) for x in px.mean(0))
+    return 125 <= h <= 155 and s >= 30 and v >= 90
+
+
 def storage_full(img):
-    """金币和圣水是否都满了。"""
-    return gold_full(img) and elixir_full(img)
+    """金币、圣水和暗黑重油是否都满了。"""
+    return gold_full(img) and elixir_full(img) and dark_elixir_full(img)
 
 
 def recover(img):
@@ -367,6 +375,9 @@ def one_round():
     if builders_reserved(screenshot()):
         log("工人都在忙，跳过升级" + (f"（留了 {KEEP_BUILDERS} 个给陛下）" if KEEP_BUILDERS else ""))
     else:
+        # 英雄用黑暗重油，先于大本营和建筑争取空闲工人。
+        if try_upgrade(find_all, find_all_scaled, TPL, log, hero_only=True):
+            return
         skip_gold = False   # 金币留着升大本营，升级时只花圣水
         build_gold = False  # 造新建筑时可以花金币（大本营要求先造齐新建筑）
         global _th_pause_until
@@ -422,19 +433,30 @@ def one_round():
     if ATTACK:
         img = screenshot()
         if storage_full(img):
-            if CFG["practice"] and not practice_mod.resting():
-                # 仓库满了联机白打，去单人模式练下兵打法（军队免费，打完自动补满）
-                plan, _ = choose_plan(attack_mod.AVAILABLE)
-                if fill_army(find_all, TPL, log, plan) is not None:
-                    practice_mod.practice(find_all, TPL, log)
+            if CFG["multiplayer_practice"] and not multiplayer_practice.resting():
+                plan = multiplayer_practice.choose_plan(attack_mod.AVAILABLE)
+                log(f"多人练兵：选择\"{plan}\"配兵")
+                plan = fill_army(find_all, TPL, log, plan)
+                if plan is not None:
+                    multiplayer_practice.reserve()
+                    attack(find_all, TPL, log, need_gold=False, need_elixir=False, need_dark=False, plan=plan, training=True)
             else:
-                log("金币和圣水都满了，这轮不进攻")
+                log("资源已满，多人练兵已关闭或正在休息")
         else:
+            if not gold_full(img) or not elixir_full(img) or time.time() >= attack_mod._dark_search_rest_until:
+                pass
+            else:
+                log("重油对手搜索暂歇中")
+                wait = random.randint(LOOP_MIN, LOOP_MAX)
+                log(f"等待 {wait} 秒")
+                time.sleep(wait)
+                return
             plan, why = choose_plan(attack_mod.AVAILABLE)  # 自动配兵：几套方案轮流试，挑抢得最多的
             log(f"这场用\"{plan}\"配兵（{why}）")
             plan = fill_army(find_all, TPL, log, plan)  # 方案里的兵种没有时会换一套
             if plan is not None:
-                attack(find_all, TPL, log, need_gold=not gold_full(img), need_elixir=not elixir_full(img), plan=plan)
+                attack(find_all, TPL, log, need_gold=not gold_full(img), need_elixir=not elixir_full(img),
+                       need_dark=not dark_elixir_full(img), plan=plan)
 
     wait = random.randint(LOOP_MIN, LOOP_MAX)
     log(f"等待 {wait} 秒")

@@ -23,6 +23,7 @@ DEFAULTS = {
     "max_not_home": 3,         # 连续几轮不在主界面就重启游戏
     "min_gold": 40000,         # 金币没满时，对手金币达到这个数就打
     "min_elixir": 40000,       # 圣水没满时，对手圣水达到这个数就打（两种都不够就换下一个）
+    "min_dark_elixir": 250,    # 重油没满时，对手重油达到这个数就打
     "max_skips": 20,           # 最多换几个对手（换一次只花几十到一两百金币，比打穷对手划算）
     "groups": 3,               # 兵分几个方向下
     "upgrade_rule": "cheap",   # 升级规则：cheap＝均衡（先升最便宜的，也就是等级最低的）；priority＝按优先级列表
@@ -31,6 +32,7 @@ DEFAULTS = {
     "keep_builders": 0,        # 留几个工人不用（给玩家自己手动升级，比如升城墙）
     "research": True,
     "practice": True,          # 仓库满了时去单人模式练兵（打下一关，比较几种下兵打法）          # 实验室自动研究（先研究最便宜的，也就是等级最低的兵种）
+    "multiplayer_practice": True,  # 满仓时限量进行普通多人练兵
     "close_action": "ask",     # 点控制面板的 ✕：ask＝每次问；tray＝退到后台；quit＝停止挂机并关闭
     "appearance": "system",    # 控制面板配色：system＝跟随系统；light＝浅色；dark＝深色
 }
@@ -44,7 +46,7 @@ BUILDINGS = {
     "tesla": "特斯拉电磁塔", "airsweeper": "空气炮",
     "bomb": "隐形炸弹", "spring": "隐形弹簧", "giantbomb": "巨型炸弹", "airbomb": "空中炸弹", "airmine": "搜空地雷",
     "mine": "金矿", "ecol": "圣水收集器", "darkdrill": "暗黑重油钻井", "darksto": "暗黑重油罐",
-    "cc": "部落城堡", "herohall": "英雄殿堂",
+    "cc": "部落城堡", "herohall": "英雄殿堂", "king": "野蛮人之王",
     "other": "其他（认不出名字的建筑）",
     "wall": "城墙",
 }

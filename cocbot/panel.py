@@ -831,11 +831,13 @@ class App(ctk.CTk):
         self.attack = tk.BooleanVar(value=cfg["attack"])
         self.th_first = tk.BooleanVar(value=cfg["townhall_first"])
         self.research = tk.BooleanVar(value=cfg["research"])
+        self.multiplayer_practice = tk.BooleanVar(value=cfg["multiplayer_practice"])
         self.walls_full = tk.BooleanVar(value=cfg["walls_only_when_full"])
         for r, (var, name, tip) in enumerate((
                 (self.attack, "自动进攻抢资源", "有一种资源没满就去打"),
                 (self.th_first, "大本营优先", "平时攒金币，够了先升大本营"),
                 (self.research, "实验室自动研究", "优先研究最常用的兵种"),
+                (self.multiplayer_practice, "满仓多人练兵", "每轮最多 3 场，之后休息 1 小时"),
                 (self.walls_full, "城墙只在金币存满时才升", "免得把升大本营的金币花在城墙上"))):
             self.switch_row(feat.body, r, var, name, tip)
         for i, (key, name, tip) in enumerate(BUILDER_NUMBERS):
@@ -989,6 +991,7 @@ class App(ctk.CTk):
         self.attack.set(d["attack"])
         self.th_first.set(d["townhall_first"])
         self.research.set(d["research"])
+        self.multiplayer_practice.set(d["multiplayer_practice"])
         for k, v in self.nums.items():
             v.set(str(d[k]))
         self.walls_full.set(d["walls_only_when_full"])
@@ -1008,6 +1011,7 @@ class App(ctk.CTk):
         cfg["attack"] = self.attack.get()
         cfg["townhall_first"] = self.th_first.get()
         cfg["research"] = self.research.get()
+        cfg["multiplayer_practice"] = self.multiplayer_practice.get()
         cfg["priority"] = list(self.order)
         cfg["walls_only_when_full"] = self.walls_full.get()
         cfg["upgrade_rule"] = self.rule.get()

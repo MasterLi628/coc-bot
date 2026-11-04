@@ -17,7 +17,7 @@ import numpy as np
 
 from .adbtool import screenshot, swipe, tap
 from .config import CFG, TEMPLATES, imread, save_debug
-from .scout import read_loot, read_number, worth_attacking
+from .scout import read_loot, read_dark_loot, read_number, worth_attacking
 
 # 兵种卡槽（底部栏）：卡宽约 110，同一组卡间隔 121，兵种/援军/英雄/法术分组之间还多空十几像素，
 # 所以每张卡的位置由 _slot_xs 按左边框现找；找不到时才按 SLOT_X0 + SLOT_DX * 卡槽号 估
@@ -30,7 +30,9 @@ GROUPS = CFG["groups"]       # 兵分几批（在"挂机控制面板.bat"里改�
 BATTLE_TIMEOUT = 200         # 秒
 MIN_GOLD = CFG["min_gold"]   # 金币没满时，对手金币达到这个数就打
 MIN_ELIXIR = CFG["min_elixir"]  # 圣水没满时，对手圣水达到这个数就打；两种都不够就换下一个
+MIN_DARK_ELIXIR = CFG["min_dark_elixir"]
 MAX_SKIPS = CFG["max_skips"] # 最多换几个对手（每次 50 金币），换满了就直接打
+_dark_search_rest_until = 0
 # 战斗画面上的按钮，试点时绝对不能点到：(x1, y1, x2, y2)
 NO_TAP = [
     (0, 620, 760, 720),      # 结束战斗/放弃、复制阵型、自动战斗
@@ -229,7 +231,7 @@ ARMY_CARDS = {
     "breaker": ("炸弹人", 2), "totem": ("图腾投手", 28), "witchgolem": ("女巫戈仑", 41),
     "ghost": ("皇家幽灵", 8), "lavaloon": ("熔岩气球", 21), "skelgiant": ("骷髅巨人", 20),
     "minion": ("亡灵", 2),  # 暗黑兵种，在兵种编辑第二屏
-    "balloon": ("气球兵", 5),
+    "balloon": ("气球兵", 5), "wizard": ("法师", 4),
 }
 # templates/army：兵种编辑里的卡片头像
 _ARMY = {p.stem: cv2.cvtColor(imread(p), cv2.COLOR_BGR2GRAY) for p in sorted((TEMPLATES / "army").glob("*.png"))}
@@ -450,7 +452,7 @@ def _deploy(find_all, tpl, log, style=None):
     # 开口可能已经把野蛮人用光了，所以重新看一眼哪些卡还有兵
     points = []
     for first in ("barb", "archer", "goblin", "ghost", "giant", "breaker", "skelgiant", "totem",
-                  "minion", "balloon", "lavaloon", "witchgolem", "king"):
+                  "minion", "wizard", "balloon", "lavaloon", "witchgolem", "king"):
         if first not in usable or _card_empty(screenshot(), slots[first]):
             continue
         tap(_sx(slots[first]), SLOT_Y)
@@ -486,6 +488,7 @@ def _deploy(find_all, tpl, log, style=None):
         ("lavaloon", main, 15, 1),    # 熔岩气球：先去打防空
         ("balloon", main, 15, 1),     # 气球兵：专炸防御，跟在肉盾后面（防空先打肉盾附近的）
         ("totem", main, 20, 2 + follow),  # 图腾投手：射程远，躲在肉盾后面输出
+        ("wizard", main, 30, 1 + follow),  # 法师跟在肉盾后面输出
         ("archer", main, 50, 1 + follow),
         ("minion", main, 30, 1 + follow),  # 亡灵：会飞，越过城墙跟在肉盾后面输出
         ("barb", main, 50, 0),
@@ -560,10 +563,10 @@ def _deploy_simple(find_all, tpl, log, angles):
 
 # ---------- 整场流程 ----------
 
-def attack(find_all, tpl, log, need_gold=True, need_elixir=True, plan=""):
+def attack(find_all, tpl, log, need_gold=True, need_elixir=True, plan="", need_dark=False, training=False):
     """打一场，成功回到村庄返回 True。need_* 表示这种资源还没满、值得抢；plan 是这场用的配兵（记进战果）。"""
-    if not (need_gold or need_elixir):
-        log("金币和圣水都满了，不进攻")
+    if not (need_gold or need_elixir or need_dark or training):
+        log("资源都满了，不进攻")
         return False
     img = screenshot()
     pts = find_all(img, tpl["home_attack"], 0.8)
@@ -600,12 +603,27 @@ def attack(find_all, tpl, log, need_gold=True, need_elixir=True, plan=""):
     # 看对手：战利品太少就换下一个
     for skip in range(MAX_SKIPS + 1):
         time.sleep(2)  # 等村庄加载完、数字显示出来
-        ok, gold, elixir = worth_attacking(screenshot(), need_gold, need_elixir, MIN_GOLD, MIN_ELIXIR)
-        if ok or skip == MAX_SKIPS:
-            log(f"对手战利品 金币 {gold} / 圣水 {elixir}，" + ("开打" if ok else f"已经换了 {MAX_SKIPS} 个，将就打"))
+        ok, gold, elixir, dark = worth_attacking(screenshot(), need_gold, need_elixir, MIN_GOLD, MIN_ELIXIR,
+                                                need_dark, MIN_DARK_ELIXIR)
+        if training:
+            log("多人练兵：使用当前普通多人对手")
             skips, offered, started = skip, (gold, elixir), time.time()
             break
-        log(f"对手战利品 金币 {gold} / 圣水 {elixir}，太少，换下一个")
+        if not ok and skip == MAX_SKIPS and need_dark and not (need_gold or need_elixir):
+            btn = find_all(screenshot(), tpl["btn_end_battle"], 0.8)
+            if btn:
+                tap(*btn[0])
+                global _dark_search_rest_until
+                _dark_search_rest_until = time.time() + 900
+                log("未找到足够重油的对手，退出搜索并休息 15 分钟")
+            else:
+                log("未找到足够重油的对手，也未找到退出按钮，停止本轮")
+            return False
+        if ok or skip == MAX_SKIPS:
+            log(f"对手战利品 金币 {gold} / 圣水 {elixir} / 重油 {dark}，" + ("开打" if ok else f"已经换了 {MAX_SKIPS} 个，将就打"))
+            skips, offered, started = skip, (gold, elixir), time.time()
+            break
+        log(f"对手战利品 金币 {gold} / 圣水 {elixir} / 重油 {dark}，太少，换下一个")
         tap(*nxt)
         nxt = _wait_for(find_all, tpl["btn_next"], 30)
         if not nxt:
@@ -616,16 +634,25 @@ def attack(find_all, tpl, log, need_gold=True, need_elixir=True, plan=""):
     main = _deploy(find_all, tpl, log)
 
     # 结算页的按钮可能是"回营"，也可能是"领取奖励"（三星时）；战利品抢光了就提前结束，不干等倒计时
-    btn, left, snap = _wait_battle_end(find_all, tpl, log, main, (need_gold, need_elixir))
+    btn, left, snap = _wait_battle_end(find_all, tpl, log, main, (need_gold, need_elixir), need_dark, training)
     if btn:
         time.sleep(1.5)  # 等结算页的数字滚完
-        got = read_result(screenshot())
-        from .stats import record
-        tg, te, ratio = record(plan, offered, left, time.time() - started, skips, got)
-        log(f"本场抢到 金币 {tg} / 圣水 {te}（对手的 {ratio:.0%}），配兵：{plan or '未知'}")
-        if ratio < 0.05 and snap is not None:  # 留一张战斗中途的截图，方便查为什么没打下来
-            save_debug(snap, "没抢到的战斗")
-            log("这场几乎没抢到，战斗中途的截图存在 debug\没抢到的战斗.png")
+        result_img = screenshot()
+        if training:
+            from . import multiplayer_practice
+            stars, percent = multiplayer_practice.read_result(result_img)
+            multiplayer_practice.record(plan, stars, percent)
+            log(f"多人练兵结果：{stars if stars is not None else '未识别'} 星，摧毁率 {str(percent) + '%' if percent is not None else '未识别'}，配兵：{plan or '未知'}")
+            if percent is None:
+                save_debug(result_img, "多人练兵_结算识别失败")
+        else:
+            got = read_result(result_img)
+            from .stats import record
+            tg, te, ratio = record(plan, offered, left, time.time() - started, skips, got)
+            log(f"本场抢到 金币 {tg} / 圣水 {te}（对手的 {ratio:.0%}），配兵：{plan or '未知'}")
+            if ratio < 0.05 and snap is not None:
+                save_debug(snap, "没抢到的战斗")
+                log("这场几乎没抢到，战斗中途的截图存在 debug\没抢到的战斗.png")
     if not btn:
         log("战斗超时没结束")
         return False
@@ -655,7 +682,7 @@ def _green_button(img):
     return (int(c[k][0]) + 300, int(c[k][1]) + 350) if st[k, cv2.CC_STAT_AREA] > 8000 else None
 
 
-def _wait_battle_end(find_all, tpl, log, main=None, need=(True, True)):
+def _wait_battle_end(find_all, tpl, log, main=None, need=(True, True), need_dark=False, training=False):
     """等战斗结算页，返回 (结算按钮, 最后读到的剩余战利品, 下兵完 30 秒左右的截图)。
     左上角剩余战利品连续两次都是 0（抢光了），就点"结束战斗"提前收工。
     中途弹出三选一奖励就选一张，奖励的兵放到主攻点 main。"""
@@ -684,7 +711,8 @@ def _wait_battle_end(find_all, tpl, log, main=None, need=(True, True)):
         gold, elixir = read_loot(img)
         if gold is not None and elixir is not None:
             left = [gold, elixir]
-        zeros = zeros + 1 if gold == 0 and elixir == 0 else 0
+        dark = read_dark_loot(img) if need_dark else 0
+        zeros = zeros + 1 if not training and gold == 0 and elixir == 0 and dark == 0 else 0
         if zeros >= 2:
             btn = find_all(img, tpl["btn_end_battle"], 0.8)
             if btn:
@@ -847,10 +875,19 @@ def _fill_cc(find_all, tpl, log):
         log("免费部落援军已选好：法师、弓箭手")
 
 
+def _prosperity_overlay(img):
+    title = imread(TEMPLATES / "prosperity_title.png")
+    return cv2.matchTemplate(img[35:110, 840:1080], title, cv2.TM_CCOEFF_NORMED).max() >= 0.9
+
+
 def _open_army(find_all, tpl):
     """打开军队界面：新版本点左下角的"战斗"按钮，再点面板里的"编辑军队"。
     打不开就返回当时的截图（里面不会有 army_title）。"""
     img = screenshot()
+    if _prosperity_overlay(img):
+        tap(1425, 56)
+        time.sleep(1)
+        img = screenshot()
     pts = find_all(img, tpl["home_attack"], 0.8)
     if not pts:
         return img
@@ -870,6 +907,10 @@ def fill_army(find_all, tpl, log, plan):
     剩下的人口补野蛮人。军队是免费的，重配不花钱。然后补满法术、（免费时）选部落援军。返回实际用的方案名。
     军队界面没打开（比如重启后活动广告晚一步弹出来盖住了村庄）返回 None，这轮不打，免得在活动页面里乱点。"""
     img = _open_army(find_all, tpl)
+    if not find_all(img, tpl["army_title"], 0.8) and _prosperity_overlay(img):
+        tap(1425, 56)
+        time.sleep(1)
+        img = _open_army(find_all, tpl)
     if not find_all(img, tpl["army_title"], 0.8):
         log("军队界面没打开，这轮不打（截图存在 debug\\军队界面没打开.png）")
         save_debug(img, "军队界面没打开")
@@ -884,6 +925,10 @@ def fill_army(find_all, tpl, log, plan):
         _fill_cc(find_all, tpl, log)
     tap(1545, 80)
     time.sleep(1)
+    # 关闭军队窗口后仍可能留在战斗侧栏；下一步要求从村庄进入战斗。
+    if find_all(screenshot(), tpl["btn_search"], 0.8):
+        tap(1300, 600)
+        time.sleep(1)
     return plan
 
 

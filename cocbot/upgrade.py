@@ -94,14 +94,14 @@ _failed = {}               # 升不了的 (建筑, 资源, 价格) → 到什么
 FAIL_COOLDOWN = 2 * 3600
 
 
-def try_upgrade(find_all, find_all_scaled, tpl, log, skip_gold=False, allow_walls=False, offense_first=False):
+def try_upgrade(find_all, find_all_scaled, tpl, log, skip_gold=False, allow_walls=False, offense_first=False, hero_only=False):
     """按升级优先级升一个现有建筑，成功返回 True。
     skip_gold：金币留着升大本营，只升花圣水的；allow_walls：允许升城墙（一般是金币满了）。"""
     now = time.time()
     banned = {k for k, until in _failed.items() if until > now}  # 最近升不了的建筑，先跳过
     for _ in range(3):
         try:
-            r = _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned, offense_first)
+            r = _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned, offense_first, hero_only)
         except Locked:
             close_windows(find_all, find_all_scaled, tpl, log)
             return False
@@ -151,7 +151,9 @@ def walls_first():
 
 
 def _usable(row, skip_gold, allow_walls, banned):
-    if row["new"] or row["red"] or row["cur"] not in ("gold", "elixir") or row["key"] in NEVER_UPGRADE:
+    if row["new"] or row["red"] or row["cur"] not in ("gold", "elixir", "dark") or row["key"] in NEVER_UPGRADE:
+        return False
+    if row["cur"] == "dark" and row["key"] != "king":
         return False
     if (row["key"], row["cur"], row["price"]) in banned:
         return False
@@ -201,12 +203,12 @@ def _sort_key(rule, rank, offense_first=False):
         price = r["price"] if r["price"] is not None else 10 ** 9
         first = offense_first and r["key"] in OFFENSE
         if rule == "priority":
-            return (not first, rank(r["key"]), price)
-        return (not first, r["key"] != "lab", r["key"] == "wall", price, rank(r["key"]))
+            return (r["key"] != "king", not first, rank(r["key"]), price)
+        return (r["key"] != "king", not first, r["key"] != "lab", r["key"] == "wall", price, rank(r["key"]))
     return key
 
 
-def _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned, offense_first=False):
+def _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned, offense_first=False, hero_only=False):
     order = priority()
     rank = lambda k: order.index(k) if k in order else order.index("other")
     key = _sort_key(CFG["upgrade_rule"], rank, offense_first)
@@ -220,17 +222,18 @@ def _try_upgrade(find_all, tpl, log, skip_gold, allow_walls, banned, offense_fir
     best = None
     for _, rows in _pages(find_all, tpl, mx):
         for r in rows:
-            if _usable(r, skip_gold, allow_walls, banned) and (best is None or key(r) < key(best)):
+            if (not hero_only or r['key'] == 'king') and _usable(r, skip_gold, allow_walls, banned) and (best is None or key(r) < key(best)):
                 best = r
     close_menu(find_all, tpl)  # 侧栏盖着地图，先收起再点空地
     tap(*DESELECT)
     time.sleep(1)
     if not best:
-        log("没有买得起的升级" + ("（金币留着升大本营）" if skip_gold else ""))
+        log("没有可升级的野蛮人之王" if hero_only else "没有买得起的升级" + ("（金币留着升大本营）" if skip_gold else ""))
         return False
     name = BUILDINGS.get(best["key"], "建筑")
     price = f"{best['price']} " if best["price"] else ""
-    log(f"升级：{name}（{price}{'金币' if best['cur'] == 'gold' else '圣水'}）")
+    currency = {"gold": "金币", "elixir": "圣水", "dark": "黑暗重油"}[best['cur']]
+    log(f"升级：{name}（{price}{currency}）")
     target = ident(best)
 
     # 第二遍：重新打开菜单，翻到这个建筑点它
@@ -692,10 +695,10 @@ def _try_build_new(find_all, tpl, log, skip_gold, pick=0):
     rank = lambda k: order.index(k) if k in order else order.index("other")
     seen.sort(key=lambda i: (i[0] in RESOURCE, rank(i[0])))
     if pick >= len(seen):
-        tap(*DESELECT)
+        _leave(find_all, tpl)
         return False
     # 菜单已经翻到底了，关掉重开，从头翻到选中的那一行
-    tap(*DESELECT)
+    _leave(find_all, tpl)
     time.sleep(1)
     mx = _open_menu(find_all, tpl)
     if mx is None:
@@ -706,7 +709,7 @@ def _try_build_new(find_all, tpl, log, skip_gold, pick=0):
         if target:
             break
     if not target:
-        tap(*DESELECT)
+        _leave(find_all, tpl)
         return False
     log(f"造新建筑：{BUILDINGS.get(target['key'], '建筑')}")
     tap(CLICK_X, target["y"] + 10)

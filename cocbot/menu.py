@@ -53,7 +53,7 @@ def _name_of(mask):
         v = float(cv2.matchTemplate(mask, t, cv2.TM_CCOEFF_NORMED).max())
         if v > best:
             best, key = v, k
-    return key
+    return "king" if key == "king_sidebar" else key
 
 
 def _cursor(icon):

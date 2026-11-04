@@ -11,6 +11,7 @@ import cv2
 from .adbtool import screenshot, swipe, tap
 from .config import TEMPLATES, imread, save_debug
 from .scout import read_number
+from .pinch import pinch_out
 from .menu import CLICK_X
 from .upgrade import DESELECT, Danger, _leave, _open_menu, _pages, _safe_shot, check_confirm, close_menu, close_windows
 
@@ -50,7 +51,7 @@ def _lab_candidates(img, find_all_scaled):
     实验室升级后长相会变，要补一张新等级的（lab_5 是 5 级正在研究时截的）。"""
     pts = []
     for f in sorted(TEMPLATES.glob("lab_*.png")):
-        if f.stem in ("lab_title", "lab_idle_tag"):
+        if f.stem == "lab_title" or f.stem.startswith("lab_idle_tag"):
             continue
         for x, y in find_all_scaled(img[130:720, 120:1460], imread(f), 0.7, (0.45, 0.5, 0.55, 0.6, 0.7, 0.8, 0.9, 1.0, 1.15, 1.3)):
             pts.append((x + 120, y + 130))
@@ -66,6 +67,10 @@ def _find_btn(img, tpl):
         if mv >= 0.8 and (best is None or mv > best[0]):
             best = (mv, ml[0] + t.shape[1] // 2, ml[1] + 600 + t.shape[0] // 2)
     return best[1:] if best else None
+
+
+def _busy_window(img, find_all):
+    return bool(find_all(img[:100], imread(TEMPLATES / "research_busy_title.png"), 0.85))
 
 
 GRID_X = (245, 1355)  # 研究窗口卡片区的左右边界
@@ -86,7 +91,7 @@ def _colored_cards(img):
                 x += 1
                 continue
             start = x
-            while x < len(on) and on[x:x + 20].any():  # 卡片中间偶尔有几列颜色淡，隔得近就算同一张
+            while x < len(on) and on[x:x + 35].any():  # 人物图案可能形成较宽的低饱和度间隙
                 x += 1
             if x - start >= 140 and start > 3 and x < len(on) - 3:
                 out.append((GRID_X[0] + (start + x) // 2, y))
@@ -100,12 +105,17 @@ def _card_price(img, x, y):
 
 def _lab_by_tag(img, find_all_scaled):
     """实验室头顶有个虚线框的提示（新版本叫"军队升级"），实验室就在它正下方。"""
-    tag = imread(TEMPLATES / "lab_idle_tag.png")
     scales = [s / 100 for s in range(60, 141, 5)]  # 字跟着地图缩放，尺寸差一点就认不出，所以挡位分得细
     # 只在地图上找：选中实验室时底部按钮上也有"研究"两个字
     # 字很小，背后的地面颜色一变（换阵型后挨着红色范围圈）分数就掉到 0.65~0.72；"训练"等别处都不到 0.55
-    # 实验室离字多远跟着地图缩放变（35~45 像素），从近到远各点一次（_select_lab 点的时候还会再往下 10）
-    return [(x, y + d) for x, y in find_all_scaled(img[:780], tag, 0.6, scales) if y < 720 for d in (60, 75, 90)]
+    # 提示文字中心到实验室会随缩放变化；先试较近位置，再尝试更远的位置。
+    # _select_lab 还会向下偏移 10 像素。
+    for filename in ("lab_idle_tag.png", "lab_idle_tag_small.png"):
+        tag = imread(TEMPLATES / filename)
+        matches = [(x, y) for x, y in find_all_scaled(img[:780], tag, 0.6, scales) if y < 720]
+        if matches:
+            return [(x, y + d) for x, y in matches for d in (25, 40, 60, 75)]
+    return []
 
 
 def _lab_from_menu(find_all, tpl):
@@ -137,11 +147,27 @@ def try_research(find_all, find_all_scaled, tpl, log):
         return "fail"
 
 
-def _select_lab(find_all, find_all_scaled, tpl, log):
+def _villager_popup(img):
+    template = imread(TEMPLATES / "villager_close.png")
+    return cv2.matchTemplate(img[20:120, 700:950], template, cv2.TM_CCOEFF_NORMED).max() >= 0.9
+
+
+def _clear_villager_popup(find_all, tpl):
+    img = _safe_shot(find_all, tpl)
+    if _villager_popup(img):
+        tap(815, 70)
+        time.sleep(1)
+        img = _safe_shot(find_all, tpl)
+    return img
+
+
+def _select_lab(find_all, find_all_scaled, tpl, log, retry_popup=True):
     """选中实验室，返回选中后的截图；找不到返回 None。"""
+    pinch_out(2)
+    time.sleep(1)
     tap(*DESELECT)  # 先取消选中别的建筑，底部按钮栏收起来
     time.sleep(0.8)
-    img = _safe_shot(find_all, tpl)
+    img = _clear_villager_popup(find_all, tpl)
     for x, y in (_lab_by_tag(img, find_all_scaled) + _lab_candidates(img, find_all_scaled))[:4]:
         tap(x, y + 10)
         time.sleep(1.5)
@@ -152,8 +178,13 @@ def _select_lab(find_all, find_all_scaled, tpl, log):
         time.sleep(0.8)
     img = _lab_from_menu(find_all, tpl)
     if img is None:
+        img = _safe_shot(find_all, tpl)
+        if retry_popup and _villager_popup(img):
+            _clear_villager_popup(find_all, tpl)
+            log("实验室：关闭村民委托浮窗后重试")
+            return _select_lab(find_all, find_all_scaled, tpl, log, False)
         log("实验室：没找到实验室（截图存在 debug\\没找到实验室.png）")
-        save_debug(_safe_shot(find_all, tpl), "没找到实验室")
+        save_debug(img, "没找到实验室")
     return img
 
 
@@ -170,6 +201,10 @@ def _try_research(find_all, find_all_scaled, tpl, log):
     tap(*btn)
     time.sleep(1.5)
     img = _safe_shot(find_all, tpl)
+    if _busy_window(img, find_all):
+        log("实验室：正在研究中")
+        close_windows(find_all, find_all_scaled, tpl, log)
+        return "busy"
     if not find_all(img, tpl["lab_title"], 0.8):
         log("实验室：研究窗口没打开（截图存在 debug\\实验室_窗口.png）")
         save_debug(img, "实验室_窗口")

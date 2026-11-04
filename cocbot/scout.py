@@ -8,6 +8,7 @@ from .config import TEMPLATES, imread
 DIGITS_DIR = TEMPLATES / "digits"
 GOLD_ROW = (108, 148)       # 战利品金币那一行的 y 范围
 ELIXIR_ROW = (155, 195)     # 圣水那一行
+DARK_ROW = (202, 242)       # 暗黑重油那一行
 ROW_X = (78, 260)
 SIZE = (14, 20)
 
@@ -56,9 +57,15 @@ def read_loot(img):
     return _read_row(img, *GOLD_ROW), _read_row(img, *ELIXIR_ROW)
 
 
-def worth_attacking(img, need_gold, need_elixir, min_gold, min_elixir):
+def read_dark_loot(img):
+    return _read_row(img, *DARK_ROW)
+
+
+def worth_attacking(img, need_gold, need_elixir, min_gold, min_elixir, need_dark=False, min_dark=250):
     """战利品够不够：没存满的资源里，任意一种达到自己的门槛就打。need_* 表示仓库没满。"""
     gold, elixir = read_loot(img)
     gold, elixir = gold or 0, elixir or 0
-    ok = (need_gold and gold >= min_gold) or (need_elixir and elixir >= min_elixir)
-    return ok, gold, elixir
+    dark = read_dark_loot(img)
+    ok = ((need_gold and gold >= min_gold) or (need_elixir and elixir >= min_elixir)
+          or (need_dark and dark is not None and dark >= min_dark))
+    return ok, gold, elixir, dark
