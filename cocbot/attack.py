@@ -311,13 +311,14 @@ def _take_end_reward(img, log, need_gold, need_elixir):
     return True
 
 
-def _drop_all(find_all, tpl, slot, points, spread, per_tap=0.1, max_taps=150, check=8, log=None, hold=False):
+def _drop_all(find_all, tpl, slot, points, spread, per_tap=0.1, max_taps=150, check=8, log=None, hold=False, on_first=None):
     """选中卡槽，在几个点之间轮流撒兵直到这张卡用完。spread 是撒开的半径（像素）；
     每放 check 下截图看一次卡用完没有（大块头一共就一两个，要每下都看）。
     hold：按住沿边拖一段，兵会连续放出来，几十个的小兵比一下下点快得多（ADB 点一下要 0.3 秒）。
     中途弹出三选一奖励时选完就返回 True（卡槽号变了，这张卡剩下的兵交给 _deploy_rest）。"""
     tap(_sx(slot), SLOT_Y)
     time.sleep(0.3)
+    started = False
     for i in range(max_taps // check if hold else max_taps):
         x, y = points[i % len(points)]
         if hold and not _swipe_ok(x - spread, y - spread // 3, x + spread, y + spread // 3):
@@ -327,6 +328,9 @@ def _drop_all(find_all, tpl, slot, points, spread, per_tap=0.1, max_taps=150, ch
                 spread = 8
         if hold:
             swipe(x - spread, y - spread // 3, x + spread, y + spread // 3, 1500)
+            if not started and on_first:
+                on_first()
+            started = True
             img = screenshot()
             _cancel_end(img, tpl)
             if _take_reward(img, log):
@@ -337,6 +341,9 @@ def _drop_all(find_all, tpl, slot, points, spread, per_tap=0.1, max_taps=150, ch
         px, py = x + random.randint(-spread, spread), y + random.randint(-spread // 2, spread // 2)
         if not _blocked(px, py) and SCREEN_Y[0] <= py <= SCREEN_Y[1]:
             tap(px, py)
+            if not started and on_first:
+                on_first()
+            started = True
             time.sleep(per_tap)
         if i % check == check - 1:
             img = screenshot()
@@ -391,6 +398,34 @@ def _cast_spells(find_all, tpl, log, scene, main):
         log(f"{BAR_NAMES[kind]}放在 ({x}, {y})")
 
 
+def _prestrike(scene, slots, log):
+    """Only strike a positively matched mortar; return its location if a spell was cast."""
+    from .defense import find_mortars, find_defenses
+    if 'lightning' not in slots or _card_empty(scene, slots['lightning']):
+        return None
+    targets = find_mortars(scene)
+    name = '迫击炮'
+    if not targets:
+        defenses = find_defenses(scene)
+        if not defenses:
+            save_debug(scene, "雷电目标未识别")
+            log('先手雷电：未可靠识别防御建筑，阵型已保存到 debug\\雷电目标未识别.png')
+            return None
+        kind, x, y = defenses[0]
+        targets = [(x, y)]
+        name = {'wizard_tower': '法师塔', 'archer_tower': '箭塔', 'cannon': '加农炮'}[kind]
+    x, y = max(targets, key=lambda p: math.hypot(p[0] - CENTER[0], (p[1] - CENTER[1]) / 0.75))
+    tap(_sx(slots['lightning']), SLOT_Y)
+    time.sleep(0.3)
+    for _ in range(6):
+        tap(x, y)
+        time.sleep(0.5)
+        if _card_empty(screenshot(), slots['lightning']):
+            break
+    log(f'先手雷电：攻击识别到的{name} ({x}, {y})，是否摧毁待观察')
+    return x, y
+
+
 def _edges(find_all, tpl, slot, angles):
     """用这张卡沿各个方向找能放兵的边缘（每找到一个点会放出 1 个兵）。"""
     tap(_sx(slot), SLOT_Y)
@@ -416,7 +451,7 @@ STYLES = {
 STYLE = "标准"  # 联机进攻用的打法
 
 
-def _deploy(find_all, tpl, log, style=None):
+def _deploy(find_all, tpl, log, style=None, prestrike_done=False):
     """按兵种分工下兵，返回主攻点（下兵失败返回 None）：
     1. 开口：有野蛮人和肉盾时，主攻方向两侧各放几个野蛮人清外围
     2. 用还有兵的小兵试出能放兵的边缘（用光了换下一张卡）
@@ -426,8 +461,15 @@ def _deploy(find_all, tpl, log, style=None):
     6. 还有兵的卡（部落援军、奖励的兵、认不出的兵）全部放到主攻点
     兵种栏一张都认不出时，按老办法一个卡槽一个卡槽下。"""
     img = scene = screenshot()
-    angles = _pick_angles(img)
     slots = identify_slots(img)
+    target = _prestrike(scene, slots, log) if slots and not prestrike_done else None
+    if target:
+        from .defense import attack_angle
+        angles = [attack_angle(target)]
+        img = screenshot()
+        slots = identify_slots(img)
+    else:
+        angles = _pick_angles(img)
     log("下兵方向：" + "、".join(f"{a:.0f}°" for a in angles)
         + "；兵种：" + ("、".join(BAR_NAMES.get(k, k) for k in slots) or "没认出来"))
     if not slots:
@@ -480,6 +522,25 @@ def _deploy(find_all, tpl, log, style=None):
         return
     main = points[:st["routes"]]
     follow = st["follow"]
+    # 先放少量巨人吸引火力，随后投第一批远程输出；剩余部队仍由下方流程处理。
+    lead_output = next((k for k in ("wizard", "archer") if k in usable), None)
+    if "giant" in usable and lead_output and follow == 0:
+        times = {}
+        for kind in ("giant", lead_output):
+            img = screenshot()
+            if not _in_battle(find_all, tpl, img):
+                return main[0]
+            if _take_reward(img, log):
+                img = screenshot()
+            slots = identify_slots(img)
+            if kind not in slots or _card_empty(img, slots[kind]):
+                break
+            _drop_all(find_all, tpl, slots[kind], main, 15 if kind == "giant" else 30,
+                      per_tap=0.25 if kind == "giant" else 0.1,
+                      max_taps=2 if kind == "giant" else 4, check=4, log=log,
+                      on_first=lambda k=kind: times.setdefault(k, time.monotonic()))
+        if "giant" in times and lead_output in times:
+            log(f"下兵间隔：巨人到{BAR_NAMES[lead_output]} {times[lead_output] - times['giant']:.1f} 秒")
     plan = [  # (兵种, 放在哪, 撒开半径, 放之前等几秒)
         ("witchgolem", main, 10, 0),  # 女巫戈仑：血厚，还会召唤骷髅
         ("skelgiant", main, 15, 0),   # 骷髅巨人：专打防御，死了还会爆炸
@@ -516,8 +577,6 @@ def _deploy(find_all, tpl, log, style=None):
         big = ARMY_CARDS[kind][1] >= 20
         _drop_all(find_all, tpl, slots[kind], pts, spread, per_tap=0.25 if big or kind in ("giant", "breaker") else 0.1,
                   check=1 if big else 8, log=log, hold=ARMY_CARDS[kind][1] == 1)
-    if _in_battle(find_all, tpl, screenshot()):
-        _cast_spells(find_all, tpl, log, scene, main[0])
     # 没认出来的卡（新兵种、部落援军、奖励的兵）和前面没放完的也放掉
     _deploy_rest(find_all, tpl, log, main)
     return main[0]
@@ -601,14 +660,14 @@ def attack(find_all, tpl, log, need_gold=True, need_elixir=True, plan="", need_d
         return False
 
     # 看对手：战利品太少就换下一个
+    prestrike_done = False
     for skip in range(MAX_SKIPS + 1):
         time.sleep(2)  # 等村庄加载完、数字显示出来
-        ok, gold, elixir, dark = worth_attacking(screenshot(), need_gold, need_elixir, MIN_GOLD, MIN_ELIXIR,
+        scene = screenshot()
+        ok, gold, elixir, dark = worth_attacking(scene, need_gold, need_elixir, MIN_GOLD, MIN_ELIXIR,
                                                 need_dark, MIN_DARK_ELIXIR)
         if training:
-            log("多人练兵：使用当前普通多人对手")
-            skips, offered, started = skip, (gold, elixir), time.time()
-            break
+            ok = True
         if not ok and skip == MAX_SKIPS and need_dark and not (need_gold or need_elixir):
             btn = find_all(screenshot(), tpl["btn_end_battle"], 0.8)
             if btn:
@@ -619,8 +678,25 @@ def attack(find_all, tpl, log, need_gold=True, need_elixir=True, plan="", need_d
             else:
                 log("未找到足够重油的对手，也未找到退出按钮，停止本轮")
             return False
-        if ok or skip == MAX_SKIPS:
-            log(f"对手战利品 金币 {gold} / 圣水 {elixir} / 重油 {dark}，" + ("开打" if ok else f"已经换了 {MAX_SKIPS} 个，将就打"))
+        if ok:
+            slots = identify_slots(scene)
+            if 'lightning' in slots and not _card_empty(scene, slots['lightning']):
+                prestrike_done = _prestrike(scene, slots, log) is not None
+                if not prestrike_done:
+                    if skip < MAX_SKIPS:
+                        log("未找到可确认的雷电目标，跳过该对手")
+                        tap(*nxt)
+                        nxt = _wait_for(find_all, tpl["btn_next"], 30)
+                        if not nxt:
+                            log("跳过未确认雷电目标后没回到搜索画面")
+                            return False
+                        continue
+                    log("连续对手都未能确认雷电目标，本轮停止，未下兵")
+                    return False
+            if training:
+                log("多人练兵：使用当前普通多人对手")
+            else:
+                log(f"对手战利品 金币 {gold} / 圣水 {elixir} / 重油 {dark}，" + ("开打" if skip < MAX_SKIPS else f"已经换了 {MAX_SKIPS} 个，将就打"))
             skips, offered, started = skip, (gold, elixir), time.time()
             break
         log(f"对手战利品 金币 {gold} / 圣水 {elixir} / 重油 {dark}，太少，换下一个")
@@ -631,7 +707,13 @@ def attack(find_all, tpl, log, need_gold=True, need_elixir=True, plan="", need_d
             return False
 
     time.sleep(random.uniform(1, 2))
-    main = _deploy(find_all, tpl, log)
+    from .adbtool import capture_counts
+    before_capture = capture_counts()
+    main = _deploy(find_all, tpl, log, prestrike_done=prestrike_done)
+    after_capture = capture_counts()
+    if CFG.get('video_stream', False):
+        log(f"下兵画面来源：视频 {after_capture['video'] - before_capture['video']} 次，"
+            f"截图 {after_capture['screenshot'] - before_capture['screenshot']} 次")
 
     # 结算页的按钮可能是"回营"，也可能是"领取奖励"（三星时）；战利品抢光了就提前结束，不干等倒计时
     btn, left, snap = _wait_battle_end(find_all, tpl, log, main, (need_gold, need_elixir), need_dark, training)

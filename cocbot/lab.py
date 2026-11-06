@@ -185,6 +185,7 @@ def _select_lab(find_all, find_all_scaled, tpl, log, retry_popup=True):
             return _select_lab(find_all, find_all_scaled, tpl, log, False)
         log("实验室：没找到实验室（截图存在 debug\\没找到实验室.png）")
         save_debug(img, "没找到实验室")
+        return None
     return img
 
 

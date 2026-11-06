@@ -1,6 +1,7 @@
 opencv-python
 customtkinter
 numpy
+av>=19.0.2  # 实验性视频流解码；默认仍使用 ADB 截图
 pystray
 pillow
 pyinstaller   # 只有打包成 exe 时需要

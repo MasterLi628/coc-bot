@@ -2,6 +2,7 @@
     python -m cocbot.adbtool shot out.png
     python -m cocbot.adbtool tap x y [out.png]   # 点击后等 1.5 秒截图
 """
+import atexit
 import subprocess
 import sys
 import time
@@ -55,7 +56,44 @@ def adb(*args, binary=False):
     return out if binary else out.decode("utf-8", "ignore")
 
 
+_stream = None
+_last_input = 0.0
+_capture_counts = {'video': 0, 'screenshot': 0}
+
+
+def capture_counts():
+    return dict(_capture_counts)
+
+
+def _stream_frame():
+    global _stream
+    if not CFG.get('video_stream', False):
+        return None
+    device_id = _cached_device()
+    if not ADB or not device_id:
+        return None
+    if _stream is None:
+        from .video_stream import VideoStream
+        _stream = VideoStream(ADB, device_id)
+        _stream.start()
+        atexit.register(_stream.close)
+    if _stream.device != device_id:
+        _stream.close()
+        _stream = None
+        return None
+    # Decode time is not capture time. Remain conservative after each input.
+    if time.monotonic() - _last_input < 0.5:
+        return None
+    return _stream.latest(after=_last_input + 0.5)
+
+
 def screenshot():
+    frame = _stream_frame()
+    _capture_counts['video' if frame is not None else 'screenshot'] += 1
+    return frame if frame is not None else _screencap()
+
+
+def _screencap():
     """返回 BGR 图像（numpy）。
     不加 -p：模拟器直接传原始像素（文件头 + RGBA），省掉在模拟器里压 PNG 的时间，比 PNG 快一倍多，画面完全一样。"""
     raw = adb("exec-out", "screencap", binary=True)
@@ -81,11 +119,15 @@ def screen_size():
 
 
 def tap(x, y):
+    global _last_input
     adb("shell", "input", "tap", str(int(x)), str(int(y)))
+    _last_input = time.monotonic()
 
 
 def swipe(x1, y1, x2, y2, ms=300):
+    global _last_input
     adb("shell", "input", "swipe", *map(str, (int(x1), int(y1), int(x2), int(y2), ms)))
+    _last_input = time.monotonic()
 
 
 if __name__ == "__main__":

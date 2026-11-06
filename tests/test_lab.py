@@ -6,6 +6,16 @@ from cocbot import bot, config, lab
 
 
 class LabRecognitionTests(unittest.TestCase):
+    def test_missing_lab_returns_failure(self):
+        home = config.imread(Path(__file__).parent / 'fixtures' / 'new_home.png')
+        with patch.object(lab, 'pinch_out'), patch.object(lab, 'tap'), \
+             patch.object(lab.time, 'sleep'), patch.object(lab, '_clear_villager_popup', return_value=home), \
+             patch.object(lab, '_lab_by_tag', return_value=[]), patch.object(lab, '_lab_candidates', return_value=[]), \
+             patch.object(lab, '_lab_from_menu', return_value=None), patch.object(lab, '_safe_shot', return_value=home), \
+             patch.object(lab, '_villager_popup', return_value=False), patch.object(lab, 'save_debug'), \
+             patch.object(lab, '_find_btn', return_value=None):
+            self.assertEqual('fail', lab._try_research(None, None, {'btn_research': home}, lambda message: None))
+
     def test_villager_popup_is_recognized_and_closed_before_search(self):
         img = config.imread(Path(__file__).parent / 'fixtures' / 'villager_popup.png')
         self.assertTrue(lab._villager_popup(img))
