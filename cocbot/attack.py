@@ -409,11 +409,13 @@ def _prestrike(scene, slots, log):
         defenses = find_defenses(scene)
         if not defenses:
             save_debug(scene, "雷电目标未识别")
-            log('先手雷电：未可靠识别防御建筑，阵型已保存到 debug\\雷电目标未识别.png')
-            return None
-        kind, x, y = defenses[0]
-        targets = [(x, y)]
-        name = {'wizard_tower': '法师塔', 'archer_tower': '箭塔', 'cannon': '加农炮'}[kind]
+            log('先手雷电：未识别到具体防御，改打阵型核心区域')
+            targets = [CENTER]
+            name = '阵型核心区域'
+        else:
+            kind, x, y = defenses[0]
+            targets = [(x, y)]
+            name = {'wizard_tower': '法师塔', 'archer_tower': '箭塔', 'cannon': '加农炮'}[kind]
     x, y = max(targets, key=lambda p: math.hypot(p[0] - CENTER[0], (p[1] - CENTER[1]) / 0.75))
     tap(_sx(slots['lightning']), SLOT_Y)
     time.sleep(0.3)
@@ -682,17 +684,6 @@ def attack(find_all, tpl, log, need_gold=True, need_elixir=True, plan="", need_d
             slots = identify_slots(scene)
             if 'lightning' in slots and not _card_empty(scene, slots['lightning']):
                 prestrike_done = _prestrike(scene, slots, log) is not None
-                if not prestrike_done:
-                    if skip < MAX_SKIPS:
-                        log("未找到可确认的雷电目标，跳过该对手")
-                        tap(*nxt)
-                        nxt = _wait_for(find_all, tpl["btn_next"], 30)
-                        if not nxt:
-                            log("跳过未确认雷电目标后没回到搜索画面")
-                            return False
-                        continue
-                    log("连续对手都未能确认雷电目标，本轮停止，未下兵")
-                    return False
             if training:
                 log("多人练兵：使用当前普通多人对手")
             else:
