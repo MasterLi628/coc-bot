@@ -90,7 +90,15 @@ def _stream_frame():
 def screenshot():
     frame = _stream_frame()
     _capture_counts['video' if frame is not None else 'screenshot'] += 1
-    return frame if frame is not None else _screencap()
+    if frame is not None:
+        return frame
+    for attempt in range(3):
+        try:
+            return _screencap()
+        except (OSError, subprocess.SubprocessError, RuntimeError):
+            if attempt == 2:
+                raise
+            time.sleep(1)
 
 
 def _screencap():

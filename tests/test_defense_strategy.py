@@ -44,6 +44,16 @@ class DefenseStrategyTests(unittest.TestCase):
             self.assertEqual((520, 500), attack._prestrike(object(), {'lightning': 0}, lambda s: None))
             self.assertEqual(((520, 500),), (tap.call_args.args,))
 
+    def test_prestrike_targets_recognized_resource_before_blind_center(self):
+        with patch('cocbot.defense.find_mortars', return_value=[]), \
+             patch('cocbot.defense.find_defenses', return_value=[]), \
+             patch.object(attack, 'loot_targets', return_value=[(600, 250, 100)]), \
+             patch.object(attack, '_card_empty', side_effect=[False, True]), \
+             patch.object(attack, 'save_debug'), patch.object(attack, 'tap') as tap, \
+             patch.object(attack, 'screenshot'), patch.object(attack.time, 'sleep'):
+            self.assertEqual((600, 250), attack._prestrike(object(), {'lightning': 0}, lambda s: None))
+        tap.assert_any_call(600, 250)
+
     def test_real_enemy_mortars_detected(self):
         image = config.imread(Path(__file__).parent / 'fixtures' / 'enemy_zoomed.png')
         found = find_mortars(image)
@@ -74,9 +84,13 @@ class DefenseStrategyTests(unittest.TestCase):
         self.assertEqual(target, chosen)
         self.assertEqual(target, calls[1])
 
-    def test_prestrike_does_not_cast_when_no_target(self):
-        with patch('cocbot.defense.find_mortars', return_value=[]), patch('cocbot.defense.find_defenses', return_value=[]), patch.object(attack, '_card_empty', return_value=False), \
-             patch.object(attack, 'tap') as tap:
-            self.assertIsNone(attack._prestrike(object(), {'lightning': 0}, lambda s: None))
-        tap.assert_not_called()
+    def test_prestrike_uses_center_when_no_defense_is_found(self):
+        with patch('cocbot.defense.find_mortars', return_value=[]), \
+             patch('cocbot.defense.find_defenses', return_value=[]), \
+             patch.object(attack, 'loot_targets', return_value=[]), \
+             patch.object(attack, '_card_empty', side_effect=[False, True]), \
+             patch.object(attack, 'save_debug'), patch.object(attack, 'screenshot'), \
+             patch.object(attack.time, 'sleep'), patch.object(attack, 'tap') as tap:
+            self.assertEqual(attack.CENTER, attack._prestrike(object(), {'lightning': 0}, lambda s: None))
+        tap.assert_any_call(*attack.CENTER)
 

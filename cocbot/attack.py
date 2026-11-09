@@ -22,7 +22,7 @@ from .scout import read_loot, read_dark_loot, read_number, worth_attacking
 # 兵种卡槽（底部栏）：卡宽约 110，同一组卡间隔 121，兵种/援军/英雄/法术分组之间还多空十几像素，
 # 所以每张卡的位置由 _slot_xs 按左边框现找；找不到时才按 SLOT_X0 + SLOT_DX * 卡槽号 估
 SLOT_X0, SLOT_DX, SLOT_Y = 190, 121, 815
-SLOTS = 10                   # 最多看几个卡槽（兵种 + 英雄 + 法术 + 援军 + 战斗中奖励的兵），空槽会跳过
+SLOTS = 12                   # 1600 宽画面可见的卡槽上限，空槽会跳过
 CARD_NUM = (742, 778)        # 卡片上 "x20" 数字所在的 y 范围
 CENTER = (800, 420)          # 战斗画面里地图的大致中心
 SCREEN_Y = (130, 712)        # 可以点的 y 范围（上面是信息栏，下面是兵种栏）
@@ -374,6 +374,48 @@ def _deploy_rest(find_all, tpl, log, main):
             tried.add(rest[0])
 
 
+def _advance_battle_bar(img, find_all, tpl):
+    """Scroll one page only when the last visible card can be tracked to the left."""
+    if len(_XS) < SLOTS:
+        return False
+    x = _XS[-1]
+    anchor = cv2.cvtColor(img[775:850, x - 45:x + 45], cv2.COLOR_BGR2GRAY)
+    if anchor.shape != (75, 90):
+        return False
+    swipe(x, SLOT_Y, max(250, x - 600), SLOT_Y, 500)
+    time.sleep(0.8)
+    after = screenshot()
+    if not _in_battle(find_all, tpl, after):
+        return False
+    strip = cv2.cvtColor(after[775:850], cv2.COLOR_BGR2GRAY)
+    _, score, _, pos = cv2.minMaxLoc(cv2.matchTemplate(strip, anchor, cv2.TM_CCOEFF_NORMED))
+    return score >= 0.85 and pos[0] + 45 < x - 80
+
+
+def _deploy_scrolled(find_all, tpl, log, main):
+    """Visit additional battle-bar pages, deploying only recognized ordinary troops."""
+    for _ in range(3):
+        img = screenshot()
+        if not _in_battle(find_all, tpl, img):
+            return
+        identify_slots(img)
+        if len(_XS) < SLOTS or not _advance_battle_bar(img, find_all, tpl):
+            return
+        img = screenshot()
+        if not _in_battle(find_all, tpl, img):
+            return
+        kinds = list(identify_slots(img))
+        for kind in kinds:
+            slots = identify_slots(img)
+            if kind not in ARMY_CARDS or kind not in slots or _card_empty(img, slots[kind]):
+                continue
+            _drop_all(find_all, tpl, slots[kind], main, 40, log=log, hold=ARMY_CARDS[kind][1] == 1)
+            img = screenshot()
+            if not _in_battle(find_all, tpl, img):
+                return
+        log('已检查战斗栏后续卡片')
+
+
 def _cast_spells(find_all, tpl, log, scene, main):
     """雷电法术打主攻点附近的资源建筑（兵正要去打的那个），帮它们快点拆掉、拿到里面的钱。
     scene 是下兵前的截图（兵还没挡住建筑，好认）。"""
@@ -409,9 +451,15 @@ def _prestrike(scene, slots, log):
         defenses = find_defenses(scene)
         if not defenses:
             save_debug(scene, "雷电目标未识别")
-            log('先手雷电：未识别到具体防御，改打阵型核心区域')
-            targets = [CENTER]
-            name = '阵型核心区域'
+            resources = loot_targets(scene)
+            if resources:
+                targets = [(x, y) for x, y, _ in resources]
+                name = '资源建筑候选'
+                log('先手雷电：未识别到防御，尝试资源建筑候选')
+            else:
+                log('先手雷电：未识别到建筑，改打阵型核心区域')
+                targets = [CENTER]
+                name = '阵型核心区域'
         else:
             kind, x, y = defenses[0]
             targets = [(x, y)]
@@ -424,7 +472,7 @@ def _prestrike(scene, slots, log):
         time.sleep(0.5)
         if _card_empty(screenshot(), slots['lightning']):
             break
-    log(f'先手雷电：攻击识别到的{name} ({x}, {y})，是否摧毁待观察')
+    log(f'先手雷电：攻击{name} ({x}, {y})，是否命中及摧毁待观察')
     return x, y
 
 
@@ -581,6 +629,7 @@ def _deploy(find_all, tpl, log, style=None, prestrike_done=False):
                   check=1 if big else 8, log=log, hold=ARMY_CARDS[kind][1] == 1)
     # 没认出来的卡（新兵种、部落援军、奖励的兵）和前面没放完的也放掉
     _deploy_rest(find_all, tpl, log, main)
+    _deploy_scrolled(find_all, tpl, log, main)
     return main[0]
 
 
@@ -721,9 +770,11 @@ def attack(find_all, tpl, log, need_gold=True, need_elixir=True, plan="", need_d
         else:
             got = read_result(result_img)
             from .stats import record
-            tg, te, ratio = record(plan, offered, left, time.time() - started, skips, got)
-            log(f"本场抢到 金币 {tg} / 圣水 {te}（对手的 {ratio:.0%}），配兵：{plan or '未知'}")
-            if ratio < 0.05 and snap is not None:
+            tg, te, ratio = record(plan, offered, left, time.time() - started, skips, got,
+                                   needed=(need_gold, need_elixir))
+            score = f"对手可用资源的 {ratio:.0%}" if ratio is not None else "战果不完整，未评分"
+            log(f"本场抢到 金币 {tg if tg is not None else '未识别'} / 圣水 {te if te is not None else '未识别'}（{score}），配兵：{plan or '未知'}")
+            if ratio is not None and ratio < 0.05 and snap is not None:
                 save_debug(snap, "没抢到的战斗")
                 log("这场几乎没抢到，战斗中途的截图存在 debug\没抢到的战斗.png")
     if not btn:
@@ -974,7 +1025,7 @@ def _open_army(find_all, tpl):
     return screenshot()
 
 
-def fill_army(find_all, tpl, log, plan):
+def fill_army(find_all, tpl, log, plan, practice=False):
     """按配兵方案 plan（stats.PLANS 里的名字）配兵：方案换了、人口没满（数字旁有红色感叹号）、
     或者这次启动还没配过，就清空重配。方案里有兵种现在没有（比如限时兵种下架了），就换一套配得出来的方案；
     剩下的人口补野蛮人。军队是免费的，重配不花钱。然后补满法术、（免费时）选部落援军。返回实际用的方案名。
@@ -988,8 +1039,8 @@ def fill_army(find_all, tpl, log, plan):
         log("军队界面没打开，这轮不打（截图存在 debug\\军队界面没打开.png）")
         save_debug(img, "军队界面没打开")
         return None
-    if _army_plan != plan or _not_full(find_all, tpl, img, "troops"):
-        plan = _fill_troops(find_all, tpl, log, plan, img)  # 配完会关掉军队界面
+    if plan is None or _army_plan != plan or _not_full(find_all, tpl, img, "troops"):
+        plan = _fill_troops(find_all, tpl, log, plan, img, practice)  # 配完会关掉军队界面
         img = _open_army(find_all, tpl)
     if _SPELL and _not_full(find_all, tpl, img, "spells"):
         _fill_spells(find_all, tpl, log)
@@ -1005,7 +1056,25 @@ def fill_army(find_all, tpl, log, plan):
     return plan
 
 
-def _fill_troops(find_all, tpl, log, plan, img):
+def _select_available_plan(plan, available, practice, log):
+    from .stats import PLANS, choose_plan
+    if plan is not None and all(k in available for k, _ in PLANS[plan]):
+        return plan
+    if practice:
+        from .multiplayer_practice import choose_plan as choose_practice
+        selected = choose_practice(available)
+    else:
+        selected, _ = choose_plan(available)
+    if plan is None:
+        log(f'识别可用兵种后选择“{selected}”配兵')
+    elif selected != plan:
+        log(f'“{plan}”的兵种不齐，改用“{selected}”')
+    else:
+        log(f'“{plan}”的兵种不齐，也没有配齐的方案，缺的用野蛮人补')
+    return selected
+
+
+def _fill_troops(find_all, tpl, log, plan, img, practice=False):
     """清空军队，按方案重配兵种，最后关掉军队界面。"""
     global _army_plan, AVAILABLE, _unknown_seen
     from .stats import PLANS, choose_plan
@@ -1039,14 +1108,7 @@ def _fill_troops(find_all, tpl, log, plan, img):
             "截图存在 debug\新兵种.png，请找 Claude 补上")
         save_debug(img, "新兵种")
     _unknown_seen = max(_unknown_seen, len(unknown))
-    missing = [ARMY_CARDS[k][0] for k, _ in PLANS[plan] if k not in AVAILABLE]
-    if missing:
-        new, _ = choose_plan(AVAILABLE)
-        if new != plan:
-            log(f"\"{plan}\"要用的{'、'.join(missing)}现在没有，改用\"{new}\"")
-            plan = new
-        else:
-            log(f"\"{plan}\"要用的{'、'.join(missing)}现在没有，也没有配得齐的方案，缺的用野蛮人补")
+    plan = _select_available_plan(plan, AVAILABLE, practice, log)
     used, parts = 0, []
     for kind, share in PLANS[plan]:  # 按方案顺序加，战斗时兵种栏也是这个顺序
         name, size = ARMY_CARDS[kind]

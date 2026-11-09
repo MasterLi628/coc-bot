@@ -40,22 +40,31 @@ def _rows():
         return []
 
 
-def record(plan, offered, left, seconds, skips, got=(None, None)):
+def record(plan, offered, left, seconds, skips, got=(None, None), needed=(True, True)):
     """记一场。offered：对手开打时的战利品；left：最后读到的剩余；got：结算页上"您得到了"的数字。
     都是 (金币, 圣水)。抢到多少优先用结算页的数字，读不出才用 对手的 - 剩余的。"""
     og, oe = (v or 0 for v in offered)
-    lg, le = (v if v is not None else o for v, o in zip(left, (og, oe)))
-    tg = got[0] if got[0] is not None else max(0, og - lg)
-    te = got[1] if got[1] is not None else max(0, oe - le)
-    lg, le = max(0, og - tg), max(0, oe - te)
-    ratio = min(1.0, (tg + te) / (og + oe)) if og + oe else 0
+    totals = []
+    for offer, remaining, result in zip((og, oe), left, got):
+        if result is not None and 0 <= result <= offer:
+            totals.append(result)
+        elif remaining is not None and 0 <= remaining <= offer:
+            totals.append(offer - remaining)
+        else:
+            totals.append(None)
+    tg, te = totals
+    lg, le = (max(0, offer - amount) if amount is not None else None
+              for offer, amount in zip((og, oe), totals))
+    denominator = sum(offer for offer, use in zip((og, oe), needed) if use)
+    valid = all(amount is not None for amount, use in zip(totals, needed) if use)
+    ratio = min(1.0, sum(amount for amount, use in zip(totals, needed) if use) / denominator) if denominator and valid else None
     new = not BATTLES.exists()
     try:
         with open(BATTLES, "a", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
             if new:
                 w.writerow(FIELDS)
-            w.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), plan, og, oe, lg, le, tg, te, f"{ratio:.3f}",
+            w.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), plan, og, oe, lg, le, tg, te, f"{ratio:.3f}" if ratio is not None else "",
                         int(seconds), skips])
     except OSError:
         pass
@@ -98,7 +107,8 @@ def summary(day=None):
     rows = [r for r in _rows() if r.get("时间", "").startswith(day)]
     gold = sum(int(r["抢到金币"] or 0) for r in rows)
     elixir = sum(int(r["抢到圣水"] or 0) for r in rows)
-    avg = sum(float(r["抢到比例"] or 0) for r in rows) / len(rows) if rows else 0
+    scored = [float(r["抢到比例"]) for r in rows if r.get("抢到比例")]
+    avg = sum(scored) / len(scored) if scored else 0
     scores = {k: v for k, v in plan_scores().items() if v[1]}
     best = max(scores, key=lambda k: scores[k][0]) if scores else ""
     return {"场数": len(rows), "金币": gold, "圣水": elixir, "平均比例": avg, "最好配兵": best,

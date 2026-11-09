@@ -52,6 +52,13 @@ class LabRecognitionTests(unittest.TestCase):
         self.assertTrue(any(830 <= x <= 980 and y == 532 for x, y in cards), cards)
         self.assertEqual(120000, lab._card_price(img, *next((x, y) for x, y in cards if 830 <= x <= 980 and y == 532)))
 
+    def test_research_card_matching_requires_same_portrait_and_price(self):
+        img = config.imread(Path(__file__).parent / 'fixtures' / 'lab_research_available.png')
+        x, y = next((x, y) for x, y in lab._colored_cards(img) if 830 <= x <= 980 and y == 532)
+        portrait = lab._research_portrait(img, x, y)
+        self.assertEqual((x, y), lab._match_research_card(img, portrait, 120000))
+        self.assertIsNone(lab._match_research_card(img, portrait, 123456))
+
     def test_current_lab_tag_produces_click_on_lab(self):
         img = config.imread(Path(__file__).parent / 'fixtures' / 'lab_current.png')
         points = lab._lab_by_tag(img, bot.find_all_scaled)

@@ -1,4 +1,5 @@
 import unittest
+import subprocess
 from unittest.mock import patch
 
 from cocbot import adbtool
@@ -6,6 +7,23 @@ from cocbot.video_stream import VideoStream
 
 
 class VideoCaptureTests(unittest.TestCase):
+    def test_screenshot_retries_transient_adb_failure(self):
+        frame = object()
+        failure = subprocess.CalledProcessError(1, ['adb'])
+        with patch.object(adbtool, '_stream_frame', return_value=None), \
+             patch.object(adbtool, '_screencap', side_effect=[failure, frame]), \
+             patch.object(adbtool.time, 'sleep'):
+            self.assertIs(adbtool.screenshot(), frame)
+
+    def test_screenshot_raises_after_bounded_retries(self):
+        failure = subprocess.CalledProcessError(1, ['adb'])
+        with patch.object(adbtool, '_stream_frame', return_value=None), \
+             patch.object(adbtool, '_screencap', side_effect=failure) as capture, \
+             patch.object(adbtool.time, 'sleep'):
+            with self.assertRaises(subprocess.CalledProcessError):
+                adbtool.screenshot()
+            self.assertEqual(3, capture.call_count)
+
     def test_stream_frame_used_when_available(self):
         frame = object()
         with patch.object(adbtool, '_stream_frame', return_value=frame), \

@@ -33,6 +33,7 @@ DEFAULTS = {
     "research": True,
     "practice": True,          # 仓库满了时去单人模式练兵（打下一关，比较几种下兵打法）          # 实验室自动研究（先研究最便宜的，也就是等级最低的兵种）
     "multiplayer_practice": True,  # 满仓时限量进行普通多人练兵
+    "builder_base": True,       # 建筑大师基地收资源、支持的部队进攻（每小时最多一次）
     "close_action": "ask",     # 点控制面板的 ✕：ask＝每次问；tray＝退到后台；quit＝停止挂机并关闭
     "appearance": "system",    # 控制面板配色：system＝跟随系统；light＝浅色；dark＝深色
 }

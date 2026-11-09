@@ -106,6 +106,9 @@ def log(msg):
 
 
 def is_home(img):
+    from . import builder_base
+    if builder_base.is_home(img):
+        return False
     if connection_lost(img) or find_all(img, TPL["btn_reload"], 0.8):
         return False
     if find_all(img[60:180, 40:160], TPL["event_back"], 0.8):  # 活动广告盖在主界面上
@@ -343,6 +346,11 @@ def one_round():
         log("屏幕上有可能花宝石的窗口，先关掉")
         close_windows(find_all, find_all_scaled, TPL, log)
         return
+    from . import builder_base
+    if builder_base.is_home(img):
+        log('检测到建筑大师基地，尝试返回主村')
+        builder_base.leave(log)
+        return
     if not is_home(img):
         _not_home += 1
         log(f"不在村庄主界面（第 {_not_home} 次）")
@@ -430,13 +438,18 @@ def one_round():
     if RESEARCH and lab_busy(screenshot()) and time.time() - _last_potion > POTION_INTERVAL:
         try_potion(find_all, find_all_scaled, TPL, log)  # 研究时间够长才用，见 lab.POTION_HOURS
         _last_potion = time.time()
+    if CFG.get('builder_base', False) and builder_base.due():
+        builder_base.reserve()
+        builder_base.visit(log)
+        return
     if ATTACK:
         img = screenshot()
         if storage_full(img):
             if CFG["multiplayer_practice"] and not multiplayer_practice.resting():
-                plan = multiplayer_practice.choose_plan(attack_mod.AVAILABLE)
-                log(f"多人练兵：选择\"{plan}\"配兵")
-                plan = fill_army(find_all, TPL, log, plan)
+                plan = multiplayer_practice.choose_plan(attack_mod.AVAILABLE) if attack_mod.AVAILABLE is not None else None
+                if plan:
+                    log(f"多人练兵：选择\"{plan}\"配兵")
+                plan = fill_army(find_all, TPL, log, plan, practice=True)
                 if plan is not None:
                     multiplayer_practice.reserve()
                     attack(find_all, TPL, log, need_gold=False, need_elixir=False, need_dark=False, plan=plan, training=True)
@@ -451,8 +464,9 @@ def one_round():
                 log(f"等待 {wait} 秒")
                 time.sleep(wait)
                 return
-            plan, why = choose_plan(attack_mod.AVAILABLE)  # 自动配兵：几套方案轮流试，挑抢得最多的
-            log(f"这场用\"{plan}\"配兵（{why}）")
+            plan, why = choose_plan(attack_mod.AVAILABLE) if attack_mod.AVAILABLE is not None else (None, '')
+            if plan:
+                log(f"这场用\"{plan}\"配兵（{why}）")
             plan = fill_army(find_all, TPL, log, plan)  # 方案里的兵种没有时会换一套
             if plan is not None:
                 attack(find_all, TPL, log, need_gold=not gold_full(img), need_elixir=not elixir_full(img),

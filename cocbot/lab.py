@@ -103,6 +103,24 @@ def _card_price(img, x, y):
     return read_number(img[y + 42:y + 78, x - 85:x + 50])
 
 
+def _research_portrait(img, x, y):
+    return cv2.cvtColor(img[y - 55:y + 30, x - 55:x + 55], cv2.COLOR_BGR2GRAY)
+
+
+def _match_research_card(img, portrait, price):
+    best = (0.85, None)
+    for x, y in _colored_cards(img):
+        if _card_price(img, x, y) != price:
+            continue
+        candidate = _research_portrait(img, x, y)
+        if candidate.shape != portrait.shape:
+            continue
+        score = float(cv2.matchTemplate(candidate, portrait, cv2.TM_CCOEFF_NORMED)[0, 0])
+        if score > best[0]:
+            best = (score, (x, y))
+    return best[1]
+
+
 def _lab_by_tag(img, find_all_scaled):
     """实验室头顶有个虚线框的提示（新版本叫"军队升级"），实验室就在它正下方。"""
     scales = [s / 100 for s in range(60, 141, 5)]  # 字跟着地图缩放，尺寸差一点就认不出，所以挡位分得细
@@ -217,7 +235,8 @@ def _try_research(find_all, find_all_scaled, tpl, log):
     while True:
         cards = _colored_cards(img)
         found += len(cards)
-        priced += [(p, x, y, page) for x, y in cards if (p := _card_price(img, x, y))]
+        priced += [(p, x, y, page, _research_portrait(img, x, y))
+                   for x, y in cards if (p := _card_price(img, x, y))]
         if page + 1 >= PAGES:
             break
         swipe(1200, 620, 300, 620, 800)
@@ -243,19 +262,24 @@ def _try_research(find_all, find_all_scaled, tpl, log):
     order = _research_order()
     rank = lambda t: order.index(t) if t in order else len(order)
     # 主力兵优先，同档便宜的先
-    price, x, y, pick = min(priced, key=lambda c: (rank(_troop_at(c[1], c[2], c[3])), c[0]))
+    price, x, y, pick, portrait = min(priced, key=lambda c: (rank(_troop_at(c[1], c[2], c[3])), c[0]))
     troop = TROOP_NAMES.get(_troop_at(x, y, pick), "兵种/法术")
-    for _ in range(page - pick):  # 翻回选中的那一页
+    target = _match_research_card(img, portrait, price)
+    for _ in range(PAGES + 2):
+        if target:
+            break
         swipe(300, 620, 1200, 620, 800)
         time.sleep(1.5)
-    if page != pick:
         img = _safe_shot(find_all, tpl)
-        again = [(x2, y2) for x2, y2 in _colored_cards(img) if y2 == y and _card_price(img, x2, y2) == price]
-        if not again:
-            log("实验室：翻回去没找到要研究的卡片，下次再试")
-            close_windows(find_all, find_all_scaled, tpl, log)
-            return "fail"
-        x, y = min(again, key=lambda p: abs(p[0] - x))
+        if not find_all(img, tpl["lab_title"], 0.8):
+            break
+        target = _match_research_card(img, portrait, price)
+    if not target:
+        save_debug(img, "实验室_翻回未找到")
+        log("实验室：翻回去没找到要研究的卡片，下次再试")
+        close_windows(find_all, find_all_scaled, tpl, log)
+        return "fail"
+    x, y = target
     tap(x, y - 20)
     time.sleep(1.5)
     img = _safe_shot(find_all, tpl)

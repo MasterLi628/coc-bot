@@ -6,6 +6,17 @@ from cocbot import attack, config, stats
 
 
 class ArmyRecognitionTests(unittest.TestCase):
+    def test_unavailable_practice_plan_uses_practice_scores(self):
+        available = {'giant', 'breaker', 'archer', 'goblin', 'wizard'}
+        with patch('cocbot.multiplayer_practice.choose_plan', return_value='法师') as choose:
+            selected = attack._select_available_plan('戈仑图腾', available, True, lambda _: None)
+        self.assertEqual('法师', selected)
+        choose.assert_called_once_with(available)
+
+    def test_initial_plan_selected_after_recognition(self):
+        available = {'giant', 'breaker', 'archer', 'goblin'}
+        with patch('cocbot.multiplayer_practice.choose_plan', return_value='哥布林多'):
+            self.assertEqual('哥布林多', attack._select_available_plan(None, available, True, lambda _: None))
     def test_prosperity_overlay_is_closed_before_opening_army(self):
         img = config.imread(Path(__file__).parent / 'fixtures' / 'prosperity_overlay.png')
         home = config.imread(Path(__file__).parent / 'fixtures' / 'new_home.png')
