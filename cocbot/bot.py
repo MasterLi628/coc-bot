@@ -15,6 +15,7 @@ import cv2
 
 from .adbtool import ADB, adb, device, screen_size, screenshot, swipe, tap
 from . import config
+from . import notifier
 from .config import CFG, PID_FILE, running_pid
 from . import attack as attack_mod
 from . import practice as practice_mod
@@ -98,6 +99,9 @@ def log(msg):
             os.replace(LOG_FILE, LOG_FILE.with_name("bot.old.log"))
     except OSError:
         pass
+    event = notifier.event_for(msg)
+    if event:
+        notifier.notify(*event)
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")

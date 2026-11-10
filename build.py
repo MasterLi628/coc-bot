@@ -5,6 +5,7 @@
 """
 import shutil
 import tempfile
+import os
 from pathlib import Path
 
 import PyInstaller.__main__
@@ -13,7 +14,7 @@ from cocbot.config import APP_NAME
 
 HERE = Path(__file__).parent
 NAME = APP_NAME
-OUT = HERE / "dist" / NAME
+OUT = Path(os.environ.get("COCBOT_BUILD_OUT", HERE / "dist" / NAME))
 
 
 def main():

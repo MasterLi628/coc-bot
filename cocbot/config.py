@@ -36,6 +36,8 @@ DEFAULTS = {
     "builder_base": True,       # 建筑大师基地收资源、支持的部队进攻（每小时最多一次）
     "close_action": "ask",     # 点控制面板的 ✕：ask＝每次问；tray＝退到后台；quit＝停止挂机并关闭
     "appearance": "system",    # 控制面板配色：system＝跟随系统；light＝浅色；dark＝深色
+    "pushplus_enabled": False,
+    "pushplus_token": "",
 }
 UPGRADE_RULES = {"cheap": "均衡：先升最便宜的（等级低的建筑先升）", "priority": "按下面的优先级列表"}
 

@@ -8,6 +8,7 @@ import queue
 import re
 import subprocess
 import sys
+import threading
 import time
 import tkinter as tk
 from collections import deque
@@ -16,7 +17,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from . import config
+from . import config, notifier
 try:  # 托盘图标（pip install pystray pillow）；没装就退回普通的最小化
     import pystray
     from PIL import Image, ImageDraw
@@ -54,12 +55,12 @@ NUMBERS = ATTACK_NUMBERS + LOOP_NUMBERS + BUILDER_NUMBERS
 
 # ---------- 配色（浅色, 深色） ----------
 FONT = "Microsoft YaHei UI"
-BG = ("#F4F5F7", "#15171C")
-SIDEBAR = ("#FFFFFF", "#1B1E24")
-CARD = ("#FFFFFF", "#20242B")
-BORDER = ("#E4E6EB", "#2C313A")
-TEXT = ("#1F2329", "#E8EAED")
-MUTED = ("#6B7280", "#9AA1AD")
+BG = ("#F4F5F7", "#0B1220")
+SIDEBAR = ("#FFFFFF", "#0F172A")
+CARD = ("#FFFFFF", "#111C2E")
+BORDER = ("#E4E6EB", "#233149")
+TEXT = ("#1F2329", "#E7EDF7")
+MUTED = ("#6B7280", "#9AAAC0")
 ACCENT = ("#D98A00", "#F2A93B")          # 金币黄
 ACCENT_HOVER = ("#B97500", "#D99428")
 ACCENT_SOFT = ("#FCF0D9", "#3A2F1C")
@@ -73,7 +74,7 @@ GRAY_SOFT = ("#EEF0F3", "#2A2E36")
 SWITCH_OFF = ("#C9CDD4", "#4A505B")
 ELIXIR = ("#B646C9", "#D17BE0")
 # 日志框不管浅色深色都用深底（像终端），颜色只要一套
-LOG_BG, LOG_FG = "#14161B", "#D4D7DD"
+LOG_BG, LOG_FG = "#09101D", "#D8E1EF"
 LOG_TAGS = {"err": "#F07070", "warn": "#F0B060", "good": "#7FD69A", "dim": "#7A808A"}
 
 
@@ -869,6 +870,23 @@ class App(ctk.CTk):
                           button_color=BORDER, button_hover_color=BORDER, text_color=TEXT).grid(
             row=r + 1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
+        # ---- 微信通知 ----
+        push = self.section(scroll, "微信通知", "通过 PushPlus 发送重要进攻、升级和异常提醒")
+        push.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 16))
+        push.body.grid_columnconfigure(1, weight=1)
+        self.pushplus_enabled = tk.BooleanVar(value=cfg.get("pushplus_enabled", False))
+        self.switch_row(push.body, 0, self.pushplus_enabled, "开启微信通知", "每类提醒设有冷却时间，避免短时间重复打扰")
+        self.label(push.body, "PushPlus Token", self.f_body).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.pushplus_token = tk.StringVar(value=cfg.get("pushplus_token", ""))
+        ctk.CTkEntry(push.body, textvariable=self.pushplus_token, height=36, font=self.f_body,
+                     corner_radius=8, border_color=BORDER, show="•").grid(
+            row=1, column=1, sticky="ew", padx=12, pady=(8, 0))
+        self.button(push.body, "测试推送", self.test_pushplus, icon="send", width=110).grid(
+            row=1, column=2, sticky="e", pady=(8, 0))
+        self.pushplus_status = self.label(push.body, "Token 保存在本机 config.json，不会写入日志。",
+                                          self.f_small, MUTED, anchor="w")
+        self.pushplus_status.grid(row=2, column=1, columnspan=2, sticky="w", padx=12, pady=(6, 0))
+
         # ---- 底部固定的保存栏 ----
         foot = self.card(page)
         foot.grid(row=1, column=0, sticky="ew", pady=(12, 0))
@@ -1000,7 +1018,23 @@ class App(ctk.CTk):
         self.walls_full.set(d["walls_only_when_full"])
         self.rule.set(d["upgrade_rule"])
         self.close_action.set(CLOSE_ACTIONS[d["close_action"]])
+        self.pushplus_enabled.set(d["pushplus_enabled"])
+        self.pushplus_token.set(d["pushplus_token"])
         self.reset_order()
+
+    def test_pushplus(self):
+        token = self.pushplus_token.get().strip()
+        if not token:
+            self.pushplus_status.configure(text="先填入 PushPlus Token，再测试。", text_color=RED)
+            return
+        self.pushplus_status.configure(text="正在发送测试消息…", text_color=ACCENT)
+
+        def worker():
+            result = notifier.send(token, "部落冲突挂机 · 测试通知", "PushPlus 微信通知已连接。")
+            self.after(0, lambda: self.pushplus_status.configure(
+                text=result.message, text_color=GREEN if result.ok else RED))
+
+        threading.Thread(target=worker, name="pushplus-test", daemon=True).start()
 
     def collect(self):
         cfg = config.load()
@@ -1020,6 +1054,8 @@ class App(ctk.CTk):
         cfg["walls_only_when_full"] = self.walls_full.get()
         cfg["upgrade_rule"] = self.rule.get()
         cfg["close_action"] = next((k for k, v in CLOSE_ACTIONS.items() if v == self.close_action.get()), "ask")
+        cfg["pushplus_enabled"] = self.pushplus_enabled.get()
+        cfg["pushplus_token"] = self.pushplus_token.get().strip()
         for key, name, _ in NUMBERS:
             try:
                 n = int(self.nums[key].get())
