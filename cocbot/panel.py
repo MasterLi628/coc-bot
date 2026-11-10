@@ -138,6 +138,15 @@ def split_time(line):
     return "", line
 
 
+def latest_log_text(line, limit=46):
+    """Fit the status-bar preview without letting long logs collide with actions."""
+    t, message = split_time(line)
+    prefix = f"最新：{t}  " if t else ""
+    if len(message) > limit:
+        message = message[:max(0, limit)] + "…"
+    return prefix + message
+
+
 def event_text(text):
     """总览"最近动态"里的一行，把长句子缩短。"""
     m = re.match(r"本场抢到 金币 (\d+) / 圣水 (\d+)（对手的 (\d+%)）(?:，配兵：(.+))?", text)
@@ -399,32 +408,33 @@ class App(ctk.CTk):
             self.toggle_btn.configure(text="启动挂机", fg_color=GREEN, hover_color=GREEN_HOVER,
                                       text_color="#FFFFFF", border_width=0, image=ui_icon("play", "#FFFFFF", 16))
         last = next((l for l in reversed(self.lines) if split_time(l)[0]), "")
-        t, text = split_time(last)
-        self.doing.configure(text=f"最新：{t}  {text}" if text else "还没有日志")
+        self.doing.configure(text=latest_log_text(last) if last else "还没有日志")
 
     # ================= 总览页 =================
     def build_overview(self, page, cfg):
         for i in range(4):
             page.grid_columnconfigure(i, weight=1, uniform="metric")
         page.grid_rowconfigure(2, weight=1)
-        self.label(page, "今日战果", self.f_h2).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
+        self.label(page, "今日战果", self.f_h2).grid(row=0, column=0, sticky="w", pady=(0, 10))
+        self.label(page, f"{time.strftime('%Y年%m月%d日')}  ·  按战斗记录日期统计", self.f_small, MUTED).grid(
+            row=0, column=1, columnspan=3, sticky="e", pady=(0, 10))
         self.metrics = {}
         for i, (key, name, color, pic) in enumerate((
                 ("场数", "进攻场数", TEXT, "battle"), ("金币", "抢到金币", ACCENT, "gold"),
-                ("圣水", "抢到圣水", ELIXIR, "elixir"), ("平均比例", "平均抢到对手的", GREEN, "star"))):
+                ("圣水", "抢到圣水", ELIXIR, "elixir"), ("平均比例", "平均掠夺率", GREEN, "star"))):
             c = self.card(page)
             c.grid(row=1, column=i, sticky="nsew", padx=(0 if i == 0 else 8, 0 if i == 3 else 8))
             c.grid_columnconfigure(0, weight=1)
             self.label(c, name, self.f_small, MUTED).grid(row=0, column=0, sticky="w", padx=(18, 0), pady=(16, 0))
             v = self.label(c, "—", self.f_metric, color)
             v.grid(row=1, column=0, sticky="w", padx=(18, 0), pady=(2, 16))
-            ctk.CTkLabel(c, text="", image=game_icon(pic, 44)).grid(row=0, column=1, rowspan=2, padx=(0, 16))
+            ctk.CTkLabel(c, text="", image=game_icon(pic, 34)).grid(row=0, column=1, rowspan=2, padx=(0, 16))
             self.metrics[key] = v
 
         plans = self.card(page)
         plans.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=(0, 8), pady=(16, 0))
         self.label(plans, "配兵成绩", self.f_h2).pack(anchor="w", padx=18, pady=(16, 0))
-        self.label(plans, "最近 20 场平均抢到对手战利品的比例，脚本会多用成绩好的那套", self.f_small, MUTED).pack(
+        self.label(plans, "最近 20 场战利品平均占比 · 脚本会更多选择成绩好的配兵", self.f_small, MUTED).pack(
             anchor="w", padx=18, pady=(2, 10))
         self.plan_box = ctk.CTkFrame(plans, fg_color="transparent")
         self.plan_box.pack(fill="both", expand=True, padx=18, pady=(0, 16))
@@ -432,10 +442,17 @@ class App(ctk.CTk):
 
         ev = self.card(page)
         ev.grid(row=2, column=2, columnspan=2, sticky="nsew", padx=(8, 0), pady=(16, 0))
-        self.label(ev, "最近动态", self.f_h2).pack(anchor="w", padx=18, pady=(16, 0))
-        self.label(ev, "升级、研究、进攻和需要注意的事", self.f_small, MUTED).pack(anchor="w", padx=18, pady=(2, 10))
+        ev_head = ctk.CTkFrame(ev, fg_color="transparent")
+        ev_head.pack(fill="x", padx=18, pady=(12, 0))
+        self.label(ev_head, "最近动态", self.f_h2).pack(side="left", anchor="w")
+        self.button(ev_head, "完整日志 →", self.show_recent_logs, width=112, height=28,
+                    font=self.f_small).pack(side="right")
+        self.label(ev, "进攻、升级和需要留意的事件", self.f_small, MUTED).pack(anchor="w", padx=18, pady=(2, 10))
         self.event_box = ctk.CTkFrame(ev, fg_color="transparent")
         self.event_box.pack(fill="both", expand=True, padx=18, pady=(0, 16))
+
+    def show_recent_logs(self):
+        self.show_page("log")
 
     def refresh_stats(self):
         try:
